@@ -1,6 +1,6 @@
 file(REMOVE_RECURSE
-  "CMakeFiles/vio_gtsam.dir/main.cpp.o"
-  "CMakeFiles/vio_gtsam.dir/main.cpp.o.d"
+  "CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o"
+  "CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o.d"
   "vio_gtsam"
   "vio_gtsam.pdb"
 )

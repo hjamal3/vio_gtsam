@@ -1,17 +1,58 @@
-# This file shows how to build and link a user project against GTSAM using CMake
-###################################################################################
-# To create your own project, replace "example" with the actual name of your project
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.0.2)
 project(vio_gtsam CXX)
 
-# Find GTSAM, either from a local build, or from a Debian/Ubuntu package.
-find_package(GTSAM REQUIRED)
+## Compile as C++11, supported in ROS Kinetic and newer
+# add_compile_options(-std=c++11)
 
-add_executable(vio_gtsam
-  main.cpp
+## Find catkin macros and libraries
+## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
+## is used, also find other catkin packages
+find_package(catkin REQUIRED COMPONENTS
+  geometry_msgs
+  roscpp
+  std_msgs
+  sensor_msgs
+  tf
+  cv_bridge
+  image_transport
+  message_filters
 )
 
-# By using CMake exported targets, a simple "link" dependency introduces the
-# include directories (-I) flags, links against Boost, and add any other
-# required build flags (e.g. C++11, etc.)
-target_link_libraries(vio_gtsam PRIVATE gtsam)
+find_package(GTSAM REQUIRED)
+
+## System dependencies are found with CMake's conventionsg
+# find_package(Boost REQUIRED COMPONENTS system)
+find_package(OpenCV 3.3.1 REQUIRED)
+include_directories(
+  ${OpenCV_INCLUDE_DIRS}
+)
+
+add_library(vio_gtsam SHARED src/vio_gtsam.cpp)
+target_link_libraries(vio_gtsam gtsam )
+
+catkin_package(
+#  INCLUDE_DIRS include
+#  LIBRARIES stereo_visual_odometry
+#  CATKIN_DEPENDS geometry_msgs roscpp std_msgs
+#  DEPENDS system_lib
+)
+
+## Specify additional locations of header files
+## Your package locations should be listed before other locations
+include_directories(
+# include
+  ${catkin_INCLUDE_DIRS}
+)
+
+## Declare a C++ executable
+## With catkin_make all packages are built within a single CMake context
+## The recommended prefix ensures that target names across packages don't collide
+# add_executable(${PROJECT_NAME}_node src/stereo_visual_odometry_node.cpp)
+add_executable(vio_gtsam_node src/vio_gtsam_node.cpp)
+add_dependencies(vio_gtsam_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(vio_gtsam_node
+   ${catkin_LIBRARIES}
+   ${OpenCV_LIBRARIES}
+   gtsam
+   vio_gtsam
+)

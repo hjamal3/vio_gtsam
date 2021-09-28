@@ -69,28 +69,28 @@ include CMakeFiles/vio_gtsam.dir/progress.make
 # Include the compile flags for this target's objects.
 include CMakeFiles/vio_gtsam.dir/flags.make
 
-CMakeFiles/vio_gtsam.dir/main.cpp.o: CMakeFiles/vio_gtsam.dir/flags.make
-CMakeFiles/vio_gtsam.dir/main.cpp.o: ../main.cpp
-CMakeFiles/vio_gtsam.dir/main.cpp.o: CMakeFiles/vio_gtsam.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/hjamal/Desktop/vio_gtsam/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/vio_gtsam.dir/main.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/vio_gtsam.dir/main.cpp.o -MF CMakeFiles/vio_gtsam.dir/main.cpp.o.d -o CMakeFiles/vio_gtsam.dir/main.cpp.o -c /home/hjamal/Desktop/vio_gtsam/main.cpp
+CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o: CMakeFiles/vio_gtsam.dir/flags.make
+CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o: ../vio_gtsam.cpp
+CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o: CMakeFiles/vio_gtsam.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/hjamal/Desktop/vio_gtsam/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o -MF CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o.d -o CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o -c /home/hjamal/Desktop/vio_gtsam/vio_gtsam.cpp
 
-CMakeFiles/vio_gtsam.dir/main.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/vio_gtsam.dir/main.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/hjamal/Desktop/vio_gtsam/main.cpp > CMakeFiles/vio_gtsam.dir/main.cpp.i
+CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/hjamal/Desktop/vio_gtsam/vio_gtsam.cpp > CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.i
 
-CMakeFiles/vio_gtsam.dir/main.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/vio_gtsam.dir/main.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/hjamal/Desktop/vio_gtsam/main.cpp -o CMakeFiles/vio_gtsam.dir/main.cpp.s
+CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/hjamal/Desktop/vio_gtsam/vio_gtsam.cpp -o CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.s
 
 # Object files for target vio_gtsam
 vio_gtsam_OBJECTS = \
-"CMakeFiles/vio_gtsam.dir/main.cpp.o"
+"CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o"
 
 # External object files for target vio_gtsam
 vio_gtsam_EXTERNAL_OBJECTS =
 
-vio_gtsam: CMakeFiles/vio_gtsam.dir/main.cpp.o
+vio_gtsam: CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o
 vio_gtsam: CMakeFiles/vio_gtsam.dir/build.make
 vio_gtsam: /usr/local/lib/libgtsam.so.4.0.2
 vio_gtsam: /usr/lib/libboost_serialization.so.1.76.0

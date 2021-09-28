@@ -1,5 +1,5 @@
-CMakeFiles/vio_gtsam.dir/main.cpp.o: \
- /home/hjamal/Desktop/vio_gtsam/main.cpp /usr/include/stdc-predef.h \
+CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o: \
+ /home/hjamal/Desktop/vio_gtsam/vio_gtsam.cpp /usr/include/stdc-predef.h \
  /usr/local/include/gtsam/geometry/Pose3.h \
  /usr/local/include/gtsam/config.h \
  /usr/local/include/gtsam/geometry/BearingRange.h \

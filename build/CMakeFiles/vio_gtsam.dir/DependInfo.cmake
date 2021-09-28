@@ -8,7 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/home/hjamal/Desktop/vio_gtsam/main.cpp" "CMakeFiles/vio_gtsam.dir/main.cpp.o" "gcc" "CMakeFiles/vio_gtsam.dir/main.cpp.o.d"
+  "/home/hjamal/Desktop/vio_gtsam/vio_gtsam.cpp" "CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o" "gcc" "CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o.d"
   )
 
 # Targets to which this target links.

@@ -129,29 +129,29 @@ vio_gtsam/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/vio_gtsam.dir/build.make CMakeFiles/vio_gtsam.dir/build
 .PHONY : vio_gtsam/fast
 
-main.o: main.cpp.o
-.PHONY : main.o
+vio_gtsam.o: vio_gtsam.cpp.o
+.PHONY : vio_gtsam.o
 
 # target to build an object file
-main.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/vio_gtsam.dir/build.make CMakeFiles/vio_gtsam.dir/main.cpp.o
-.PHONY : main.cpp.o
+vio_gtsam.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/vio_gtsam.dir/build.make CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.o
+.PHONY : vio_gtsam.cpp.o
 
-main.i: main.cpp.i
-.PHONY : main.i
+vio_gtsam.i: vio_gtsam.cpp.i
+.PHONY : vio_gtsam.i
 
 # target to preprocess a source file
-main.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/vio_gtsam.dir/build.make CMakeFiles/vio_gtsam.dir/main.cpp.i
-.PHONY : main.cpp.i
+vio_gtsam.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/vio_gtsam.dir/build.make CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.i
+.PHONY : vio_gtsam.cpp.i
 
-main.s: main.cpp.s
-.PHONY : main.s
+vio_gtsam.s: vio_gtsam.cpp.s
+.PHONY : vio_gtsam.s
 
 # target to generate assembly for a file
-main.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/vio_gtsam.dir/build.make CMakeFiles/vio_gtsam.dir/main.cpp.s
-.PHONY : main.cpp.s
+vio_gtsam.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/vio_gtsam.dir/build.make CMakeFiles/vio_gtsam.dir/vio_gtsam.cpp.s
+.PHONY : vio_gtsam.cpp.s
 
 # Help Target
 help:
@@ -162,9 +162,9 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... vio_gtsam"
-	@echo "... main.o"
-	@echo "... main.i"
-	@echo "... main.s"
+	@echo "... vio_gtsam.o"
+	@echo "... vio_gtsam.i"
+	@echo "... vio_gtsam.s"
 .PHONY : help
 
 
