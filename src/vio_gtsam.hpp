@@ -21,11 +21,11 @@ using namespace gtsam;
 
 struct StereoFeature
 {
+    StereoFeature(int xl, int xr, int y, size_t landmark_id) : xl(xl), xr(xr), y(y), landmark_id(landmark_id) {}
     int xl = 0; // feature x coordinate in left image (pixel)
     int xr = 0; // feature x coordinate in right image
     int y = 0;  // feature y coordinate in both images (input image is rectified)
     size_t landmark_id = -1;
-    Point3 position; // 3D triangulated position
 };
 
 struct CameraParameters
@@ -38,8 +38,13 @@ struct CameraParameters
     static constexpr double cy = 240; // offset y
     static constexpr double b = 0.2; // baseline in meters
 
-    // Stereo camera calibration object
+    // Stereo camera intrinsic calibration object
     Cal3_S2Stereo::shared_ptr K;
+
+    // Extrinsic calibration object (p_body = body_P_sensor*p_sensor)
+    Pose3 body_P_sensor;
+    const Rot3 R_bc = Rot3::RzRyRx(-M_PI_2, 0.0, -M_PI_2);
+    const Point3 t_bc = Point3(0.25, -0.10, 1.0);
 
     // noise model for stereo points
     const noiseModel::Isotropic::shared_ptr stereo_model = noiseModel::Isotropic::Sigma(3,1);
@@ -88,6 +93,8 @@ public:
     void integrate_imu(double ax, double ay, double az, double wx, double wy, double wz);
 
     void stereo_update(const std::vector<StereoFeature> & stereo_features);
+
+    void add_stereo_factors(const std::vector<StereoFeature> & stereo_features);
 
     void initialize_pose(double qw, double qx, double qy, double qz, double x, double y, double z);
 

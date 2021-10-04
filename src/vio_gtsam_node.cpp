@@ -1,79 +1,16 @@
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS 0 // boost warning
 
-#include "ros/ros.h"
-#include "vio_gtsam.hpp"
+#include "vio_gtsam_node.hpp"
 
 #include <message_filters/sync_policies/approximate_time.h> // message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image>
 #include <message_filters/subscriber.h> // message_filters::Subscriber<sensor_msgs::Image>
-#include <sensor_msgs/Image.h> // sensor_msgs::ImageConstPtr
-#include "sensor_msgs/Imu.h" // sensor_msgs::Imu::ConstPtr
-#include "opencv2/imgproc/imgproc.hpp" // cv::Mat
 #include <cv_bridge/cv_bridge.h> // cv_bridge::toCvCopy
-
-#include "opencv2/video/tracking.hpp" // KLT
-
-using namespace std;
-
-struct FeatureSet
-{
-    std::vector<cv::Point2f> features;
-    std::vector<int> ids;
-    size_t get_size() { return features.size(); }
-}
-
-struct VIONode
-{
-
-    VIONode(ros::NodeHandle & n);
-
-    void stereo_callback(const sensor_msgs::ImageConstPtr& image_left, const sensor_msgs::ImageConstPtr& image_right);
-
-    const string img_left = "/stereo/left/image_rect";
-    const string img_right = "/stereo/right/image_rect";
-    const int img_queue_size = 1;
-
-    cv::Mat proj_mat_l;
-    cv::Mat proj_mat_r;
-
-    cv::Mat image_left_t0;
-    cv::Mat image_right_t0;
-    cv::Mat image_left_t1;
-    cv::Mat image_right_t1;
-
-private:
-    VIOEstimator vio_estimator;
-    ros::Subscriber imu_subscriber;
-    size_t frame_id = 0;
-
-    FeatureSet feature_set;
-    size_t feature_id = 0;
-
-    cv::Mat ros_img_to_cv_img(const sensor_msgs::ImageConstPtr img) const;
-    void imu_callback(const sensor_msgs::Imu::ConstPtr& msg);
-    void stereo_update(const cv::Mat & image_left, const cv::Mat & image_right);
-    void feature_matching();
-    void circular_matching();
-    void add_new_landmarks();
-
-    void detect_new_features(std::vector<cv::Point2f> & points, 
-        std::vector<int> & response_strengths) const;
-
-    void bucket_and_update_feature_set(const std::vector<cv::Point2f> & features, 
-        const std::vector<int> & strengths);
-
-    void triangulate_features(const std::vector<cv::Point2f> & points_left, 
-        const std::vector<cv::Point2f> & points_right, 
-        cv::Mat & points3D) const;
-};
+#include <opencv2/video/tracking.hpp> // KLT
+#include <opencv2/calib3d/calib3d.hpp> // triangulatePoints
 
 VIONode::VIONode(ros::NodeHandle & n)
 {
-    // initialize gtsam estimator
-    vio_estimator.initialize_pose(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0); // initialize pose (attitude important)
-    vio_estimator.init();
-    vio_estimator.test_odometry_plus_loop_closure();
-
-    imu_subscriber = n.subscribe("/imu/data", 1000, &VIONode::imu_callback,  this);
+    imu_subscriber = n.subscribe(imu_topic, 1000, &VIONode::imu_callback,  this);
 
     // camera projection matrices
     const float fx = vio_estimator.camera_params.fx; 
@@ -84,6 +21,21 @@ VIONode::VIONode(ros::NodeHandle & n)
     proj_mat_l = (cv::Mat_<double>(3, 4) << fx, 0., cx, 0., 0., fy, cy, 0., 0,  0., 1., 0.);
     proj_mat_r = (cv::Mat_<double>(3, 4) << fx, 0., cx, b, 0., fy, cy, 0., 0,  0., 1., 0.);
 }
+
+void VIONode::run_gtsam(const std::vector<cv::Point2f> & features_l1, 
+    const std::vector<cv::Point2f> & features_r1,
+    const std::vector<int> & ids)
+{
+    // add latest stereo factor and run gtsam
+    std::vector<StereoFeature> stereo_features;
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+        StereoFeature stereo_feature(features_l1[i].x, features_r1[i].x, features_l1[i].y, ids[i]);
+        stereo_features.push_back(stereo_feature);
+    }
+    vio_estimator.stereo_update(stereo_features);
+}
+
 
 // ros images to opencv images
 cv::Mat VIONode::ros_img_to_cv_img(const sensor_msgs::ImageConstPtr img) const 
@@ -100,78 +52,129 @@ cv::Mat VIONode::ros_img_to_cv_img(const sensor_msgs::ImageConstPtr img) const
     return cv_ptr->image;
 }
 
-void VIONode::delete_unmatched_features(std::vector<cv::Point2f>& points0, std::vector<cv::Point2f>& points1,
-                          std::vector<cv::Point2f>& points2, std::vector<cv::Point2f>& points3,
-                          std::vector<cv::Point2f>& points0_return,
-                          std::vector<uchar>& status0, std::vector<uchar>& status1,
-                          std::vector<uchar>& status2, std::vector<uchar>& status3,
-                          FeatureSet & current_features)
+// transform 3D points to world frame given pose: (p_w = R_wc*p_c + t_wc)
+cv::Mat VIONode::transform_to_world(const cv::Mat & points3D_cam, 
+    const cv::Mat & R_wc,
+    const cv::Mat & t_wc) const
 {
-    int idx_correction = 0;
-    for(int i = 0; i < status3.size(); i++)
-    {  
-        cv::Point2f pt0 = points0.at(i - idx_correction);
-        cv::Point2f pt1 = points1.at(i - idx_correction);
-        cv::Point2f pt2 = points2.at(i - idx_correction);
-        cv::Point2f pt3 = points3.at(i - idx_correction);
-        cv::Point2f pt0_r = points0_return.at(i - idx_correction);
-        if ((status3.at(i) == 0) || (pt3.x < 0) || (pt3.y < 0) ||
-            (status2.at(i) == 0) || (pt2.x < 0) || (pt2.y < 0) ||
-            (status1.at(i) == 0) || (pt1.x < 0) || (pt1.y < 0) ||
-            (status0.at(i) == 0) || (pt0.x < 0) || (pt0.y < 0))   
-        {
-            if((pt0.x < 0) || (pt0.y < 0) || (pt1.x < 0) || (pt1.y < 0) || 
-                (pt2.x < 0) || (pt2.y < 0) || (pt3.x < 0) || (pt3.y < 0))    
-            {
-                status3.at(i) = 0;
-            }
-            points0.erase(points0.begin() + (i - idx_correction));
-            points1.erase(points1.begin() + (i - idx_correction));
-            points2.erase(points2.begin() + (i - idx_correction));
-            points3.erase(points3.begin() + (i - idx_correction));
-            points0_return.erase(points0_return.begin() + (i - idx_correction));
+    cv::Mat points3D_w;
+    cv::Mat T_wc; // homogeneous transformation matrix
+    cv::Mat bottom_row = (cv::Mat_<double>(1, 4) << 0, 0, 0, 1);
+    cv::hconcat(R_wc, t_wc, T_wc);
+    cv::vconcat(T_wc, bottom_row, T_wc);
 
-            // also update the feature set 
-            current_features.ages.erase (current_features.ages.begin() + (i - idx_correction));
-            current_features.strengths.erase (current_features.strengths.begin() + (i - idx_correction));
-            idx_correction++;
-        }
-    }  
+    // transform point from camera frame to body frame
+
+    return points3D_w;
 }
 
-void VIONode::circularMatching(cv::Mat img_l_0, cv::Mat img_r_0, cv::Mat img_l_1, cv::Mat img_r_1,
-                      std::vector<cv::Point2f>& points_l_0, std::vector<cv::Point2f>& points_r_0,
-                      std::vector<cv::Point2f>& points_l_1, std::vector<cv::Point2f>& points_r_1,
-                      std::vector<cv::Point2f>& points_l_0_return,
-                      FeatureSet& current_features) { 
-    
+// GTSAM pose to opencv matrices
+void VIONode::gtsam_to_open_cv_pose(const Pose3 & gtsam_pose, cv::Mat& R_wb, cv::Mat& t_wb) const 
+{
+    Rot3 R = gtsam_pose.rotation();
+    Point3 t = gtsam_pose.translation();
+    R_wb = (cv::Mat_<double>(3,3) << R.r1().x(), R.r1().y(), R.r1().z(), 
+        R.r2().x(), R.r2().y(), R.r2().z(), 
+        R.r3().x(), R.r3().y(), R.r3().z());
+    t_wb = (cv::Mat_<double>(3,1) << t.x(), t.y(), t.z());
+}
+
+
+
+void VIONode::triangulate_features(const std::vector<cv::Point2f> & features_left, 
+    const std::vector<cv::Point2f> & features_right, 
+    cv::Mat & features_3D) const
+{
+    cv::Mat points4D;
+    cv::triangulatePoints(proj_mat_l, proj_mat_r, features_left, features_right, points4D);
+    cv::convertPointsFromHomogeneous(points4D.t(), features_3D);
+}
+
+
+void VIONode::reset_feature_set()
+{
+    feature_set.features_l.clear();
+    feature_set.features_r.clear();
+    feature_set.ids.clear();
+}
+
+
+void VIONode::add_new_landmarks(const std::vector<cv::Point2f> & features_l0, 
+    const std::vector<cv::Point2f> & features_r0, 
+    const cv::Mat & points3D_w0, 
+    const std::vector<int> & ids)
+{
+    // add new landmarks and their stereo factors
+    std::vector<StereoFeature> stereo_features;
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+        // TODO: CHECK DIRECTION i,0 or 0,i
+        Point3 pt(points3D_w0.at<double>(i,0), points3D_w0.at<double>(i,1), points3D_w0.at<double>(i,2));
+        vio_estimator.add_landmark_estimate(pt, ids[i]);
+        StereoFeature stereo_feature(features_l0[i].x, features_r0[i].x, features_l0[i].y, ids[i]);
+        stereo_features.push_back(stereo_feature);
+    }
+    vio_estimator.add_stereo_factors(stereo_features);
+}
+
+
+void VIONode::circular_matching(std::vector<cv::Point2f> & points_l_0, 
+    std::vector<cv::Point2f> & points_r_0, 
+    std::vector<cv::Point2f> & points_l_1, 
+    std::vector<cv::Point2f> & points_r_1,
+    std::vector<int> & ids) const
+{
+    std::vector<cv::Point2f> points_l_0_return;   
     std::vector<float> err;         
-    cv::Size winSize=cv::Size(20,20); // Lucas-Kanade optical flow window size                                                                                          
-    cv::TermCriteria termcrit=cv::TermCriteria(cv::TermCriteria::COUNT+cv::TermCriteria::EPS, 30, 0.01);
+    
+    cv::Size win_size = cv::Size(20,20); // Lucas-Kanade optical flow window size                                                                                          
+    cv::TermCriteria term_crit = cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, 0.01);
+
     std::vector<uchar> status0;
     std::vector<uchar> status1;
     std::vector<uchar> status2;
     std::vector<uchar> status3;
+
     // sparse iterative version of the Lucas-Kanade optical flow in pyramids
-    cv::calcOpticalFlowPyrLK(img_l_0, img_r_0, points_l_0, points_r_0, status0, err, 
-        winSize, 3, termcrit, cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 0.01);
-    cv::calcOpticalFlowPyrLK(img_r_0, img_r_1, points_r_0, points_r_1, status1, err, 
-        winSize, 3, termcrit, cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 0.01);
-    cv::calcOpticalFlowPyrLK(img_r_1, img_l_1, points_r_1, points_l_1, status2, err, 
-        winSize, 3, termcrit, cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 0.01);
-    cv::calcOpticalFlowPyrLK(img_l_1, img_l_0, points_l_1, points_l_0_return, status3, err, 
-        winSize, 3, termcrit, cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 0.01);
-    delete_unmatched_features(points_l_0, points_r_0, points_r_1, points_l_1, points_l_0_return,
-        status0, status1, status2, status3, current_features);
+    // To do: reuse pyramids
+    cv::calcOpticalFlowPyrLK(image_left_t0, image_right_t0, points_l_0, points_r_0, status0, err, 
+        win_size, 3, term_crit, cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 0.01);
+    cv::calcOpticalFlowPyrLK(image_right_t0, image_right_t1, points_r_0, points_r_1, status1, err, 
+        win_size, 3, term_crit, cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 0.01);
+    cv::calcOpticalFlowPyrLK(image_right_t1, image_left_t1, points_r_1, points_l_1, status2, err, 
+        win_size, 3, term_crit, cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 0.01);
+    cv::calcOpticalFlowPyrLK(image_left_t1, image_left_t0, points_l_1, points_l_0_return, status3, err, 
+        win_size, 3, term_crit, cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 0.01);
+
+    // remove unmatched features after circular matching
+    // To do: add distance check (vertical direction)
+    int idx_correction = 0;
+    for (size_t i = 0; i < status3.size(); ++i)
+    {  
+        const cv::Point2f & pt1 = points_r_0.at(i - idx_correction);
+        const cv::Point2f & pt2 = points_r_1.at(i - idx_correction);
+        const cv::Point2f & pt3 = points_l_1.at(i - idx_correction);
+        const cv::Point2f & pt0_r = points_l_0_return.at(i - idx_correction);
+        if ((status3.at(i) == 0) || (pt3.x < 0) || (pt3.y < 0) ||
+            (status2.at(i) == 0) || (pt2.x < 0) || (pt2.y < 0) ||
+            (status1.at(i) == 0) || (pt1.x < 0) || (pt1.y < 0) ||
+            (status0.at(i) == 0) || (pt0_r.x < 0) || (pt0_r.y < 0))   
+        {
+            points_l_0.erase(points_l_0.begin() + (i - idx_correction));
+            points_r_0.erase(points_r_0.begin() + (i - idx_correction));
+            points_r_1.erase(points_r_1.begin() + (i - idx_correction));
+            points_l_1.erase(points_l_1.begin() + (i - idx_correction));
+            points_l_0_return.erase(points_l_0_return.begin() + (i - idx_correction));
+            ids.erase(ids.begin() + (i - idx_correction));
+            idx_correction++;
+        }
+    }
 }
 
-void VIONode::triangulate_features(const std::vector<cv::Point2f> & points_left, 
-    const std::vector<cv::Point2f> & points_right, 
-    cv::Mat & points3D) const
+void VIONode::update_feature_set(std::vector<cv::Point2f> & features_l1, std::vector<cv::Point2f> & features_r1)
 {
-    cv::Mat points3D, points4D;
-    cv::triangulatePoints(proj_mat_l, proj_mat_r, points_left, points_right, points4D);
-    cv::convertPointsFromHomogeneous(points4D.t(), points3D);
+    feature_set.features_l = features_l1;
+    feature_set.features_r = features_r1;
 }
 
 void VIONode::detect_new_features(std::vector<cv::Point2f> & features, 
@@ -190,14 +193,16 @@ void VIONode::detect_new_features(std::vector<cv::Point2f> & features,
     for (const auto & keypoint : keypoints) strengths.push_back(keypoint.response); 
 }
 
-void bucket_and_update_feature_set(const std::vector<cv::Point2f> & features, 
+void VIONode::bucket_and_update_feature_set(const std::vector<cv::Point2f> & features, 
     const std::vector<int> & strengths)
 {
     // sort features by strengths
-
     const int num_buckets_per_axis = 10;
     const int num_features_per_bucket = 2;
     const int num_features_min = 100;
+    const int dim_bucket_x = img_width/num_buckets_per_axis;
+    const int dim_bucket_y = img_height/num_buckets_per_axis;
+
 
     // iterate through features 
     std::vector<int> buckets;
@@ -206,13 +211,16 @@ void bucket_and_update_feature_set(const std::vector<cv::Point2f> & features,
     for (size_t i = 0; i < features.size(); ++i)
     {
         // compute bucket idx
-        int idx = 0;
+        int x = features[i].x;
+        int y = features[i].y;
+
+        int bucket_idx = x/dim_bucket_x + (y*num_buckets_per_axis)/dim_bucket_y;
 
         // check if bucket has space
-        if (buckets[idx] < num_features_per_bucket)
+        if (buckets[bucket_idx] < num_features_per_bucket)
         {
             // add bucket counter
-            buckets[idx]++;
+            buckets[bucket_idx]++;
             // add index to output
             idx.push_back(i);
             // leave loop if enough features found
@@ -220,17 +228,17 @@ void bucket_and_update_feature_set(const std::vector<cv::Point2f> & features,
         }
     }
 
-    // for now clear everything and start over
-    feature_set.features.resize(idx.size());
+    // clear everything and start over
+    reset_feature_set();
+    feature_set.features_l.resize(idx.size());
     feature_set.ids.resize(idx.size());
     for (size_t i = 0; i < idx.size(); ++i)
     {
-        feature_set.features.push_back(features[i]);
+        feature_set.features_l.push_back(features[i]);
         feature_set.ids.push_back(feature_id);
         feature_id++;
     }
 }
-
 
 void VIONode::replace_all_features()
 {
@@ -243,102 +251,101 @@ void VIONode::replace_all_features()
     bucket_and_update_feature_set(features, strengths);
 }
 
-void VIONode::transform_to_world(const cv::Mat & points3D_cam, cv::Mat & points3D_world)
+void VIONode::feature_tracking(const cv::Mat & image_left, const cv::Mat & image_right)
 {
-    Pose3 pose = vio_estimator.get_pose();
-}
-
-void VIONode::feature_matching()
-{
-    const int min_num_features = 100;
-    static size_t landmark_id = 0;
-
-    bool replaced_features = false;
-
-    // if ! enough features in current feature set
-    if (feature_set.get_size() < min_num_features)
-    {
-        replace_all_features();
-        replaced_features = true;
-
-    }
-
-    // tracks features between frames into next position and updates featureset positions
-    circular_matching();
-
-    if (replaced_features)
-    {
-        // triangulate and add em
-    }
-    update_feature_set();
-
-    // iterate through features
-    for (auto & feature : feature_set)
-    {
-
-    }
-
-    // circular matching
-    // triangulate inliers and add them to the set
-    // update featureset with the new positions
-    // detect features on image
-    // bucketing, select N of the strongest features
-    // track old features - circular matching
-    // add new positions to stereo set
-
-    // track new features - circular matching
-    // triangulate inliers and add to featureset (increment landmark ids)
-    // get current pose and put newly triangulated stereo points into world frame
-
-    // add to stereo set
-
-    // compute gtsam stuff
-
-    // print pose
-}
-
-void VIONode::stereo_update(const cv::Mat & image_left, const cv::Mat & image_right)
-{
-
+    // check if this is the first image
     if (!frame_id)
     {
         image_left_t0 = image_left;
         image_right_t0 = image_right;
         frame_id++;
         return;
-    } else 
+    } 
+
+    // store new image
+    image_left_t1 = image_left;
+    image_right_t1 = image_right;
+    frame_id++;
+
+    // if ! enough features in current feature set, replace all of them
+    bool replaced_features = false;
+    const int min_num_features = 100;
+    if (feature_set.get_size() < min_num_features)
     {
-        image_left_t1 = image_left;
-        image_right_t1 = image_right;
-        frame_id++;
+        replace_all_features();
+        replaced_features = true;
     }
 
-    // feature matching
-    feature_matching();
+    // track features between frames into next position and updates feature_set positions
+    std::vector<cv::Point2f> & features_l0 = feature_set.features_l;
+    std::vector<cv::Point2f> & features_r0 = feature_set.features_r;
+    std::vector<cv::Point2f> features_l1;
+    std::vector<cv::Point2f> features_r1;
+    circular_matching(features_l0, features_r0, features_l1, features_r1, feature_set.ids);
 
-    // update images
+    // if detected new features, add them as landmarks to gtsam graph
+    if (replaced_features)
+    {
+        cv::Mat features_3D_l0;
+        triangulate_features(feature_set.features_l, feature_set.features_r, features_3D_l0);
+        Pose3 gtsam_pose = vio_estimator.get_pose();
+        cv::Mat R_wb;
+        cv::Mat t_wb;
+        gtsam_to_open_cv_pose(gtsam_pose, R_wb, t_wb);
+        cv::Mat features_3D_w0 = transform_to_world(features_3D_l0, R_wb, t_wb);
+
+        // add new landmarks (stereo features at previous image) 
+        add_new_landmarks(features_l0, features_r0, features_3D_w0, feature_set.ids);
+    }
+
+    // update feature_set
+    feature_set.features_l = features_l1;
+    feature_set.features_r = features_r1;
+
+    // set previous image as new image
     image_left_t0 = image_left_t1;
     image_right_t0 = image_right_t1;
 }
 
 void VIONode::stereo_callback(const sensor_msgs::ImageConstPtr& image_left, const sensor_msgs::ImageConstPtr& image_right)
 {
-    cv::Mat l = ros_img_to_cv_img(image_left);
-    cv::Mat r = ros_img_to_cv_img(image_right);
-    stereo_update(l, r);
+    if (state == STATE::RUNNING_VIO)
+    {
+        cv::Mat l = ros_img_to_cv_img(image_left);
+        cv::Mat r = ros_img_to_cv_img(image_right);
+        feature_tracking(l, r);
+        run_gtsam(feature_set.features_l, feature_set.features_r, feature_set.ids);
+    } 
+}
 
-    // ros node just passes things along
-
-    // some form of cleanup on the graph, merging, removing landmarks that have not enough views
-
-    // some form of visualization
+void VIONode::initialize_estimator(int qw, int qx, int qy, int qz)
+{
+    // initialize gtsam estimator
+    vio_estimator.initialize_pose(qw, qx, qy, qz, 0.0, 0.0, 0.0); // initialize pose (attitude important)
+    vio_estimator.init();
+    vio_estimator.test_odometry_plus_loop_closure();
 }
 
 void VIONode::imu_callback(const sensor_msgs::Imu::ConstPtr& msg)
 {
     geometry_msgs::Vector3 w = msg->angular_velocity;
     geometry_msgs::Vector3 f = msg->linear_acceleration;
-    vio_estimator.integrate_imu(f.x, f.y, f.z, w.x, w.y, w.z);
+    if (state == STATE::IMU_INITIALIZATION)
+    {
+        attitude_initializer.add_data(f.x, f.y, f.z, w.x, w.y, w.z);
+        num_imu_init_measurements++;
+        // check if initialization completed
+        if (num_imu_init_measurements == num_imu_init_measurements_required)
+        {
+            state = STATE::RUNNING_VIO;
+            double qw, qx, qy, qz;
+            attitude_initializer.compute_orientation(num_imu_init_measurements_required, qw, qx, qy, qz);
+            initialize_estimator(qw, qx, qy, qz);
+        }
+    } else if (state == STATE::RUNNING_VIO)
+    {
+        vio_estimator.integrate_imu(f.x, f.y, f.z, w.x, w.y, w.z);
+    }
 }
 
 int main(int argc, char **argv)
@@ -348,9 +355,6 @@ int main(int argc, char **argv)
     ros::NodeHandle n;
 
     VIONode vio_node(n);
-
-    // initialization procedure sets up the IMU orientation
-    // imu camera extrinsics???
 
     // using message_filters to get stereo callback on one topic
     message_filters::Subscriber<sensor_msgs::Image> image1_sub(n, vio_node.img_left, vio_node.img_queue_size);

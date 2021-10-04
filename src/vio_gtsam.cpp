@@ -24,8 +24,9 @@ using symbol_shorthand::L; // landmark (Point3) (x,y,z)
 
 void CameraParameters::init_params()
 {
-    // Set up camera calibration matrix
+    // Set up camera calibration matrix and extrinsic parameters
     K = boost::make_shared<Cal3_S2Stereo>(Cal3_S2Stereo(fx, fy, s, cx, cy, b));
+    body_P_sensor = Pose3(R_bc, t_bc);
 }
 
 void IMUParameters::init_params()
@@ -45,6 +46,7 @@ void IMUParameters::init_params()
 
     imu_preintegrated_ =
         std::make_shared<PreintegratedCombinedMeasurements>(preint_params, prior_imu_bias);
+
 }
 
 void VIOEstimator::init()
@@ -101,7 +103,7 @@ void VIOEstimator::optimize_graph_and_update_state()
 void VIOEstimator::add_stereo_factor(int xl, int xr, int y, size_t pose_id, size_t landmark_id)
 {
     graph.emplace_shared<GenericStereoFactor<Pose3,Point3>>(StereoPoint2(xl, xr, y), 
-        camera_params.stereo_model, X(pose_id), L(landmark_id), camera_params.K);
+        camera_params.stereo_model, X(pose_id), L(landmark_id), camera_params.K, camera_params.body_P_sensor);
 }
 
 // add odometry factor to graph. for example from PnP perhaps. unused for now.
@@ -178,6 +180,14 @@ void VIOEstimator::stereo_update(const std::vector<StereoFeature> & stereo_featu
 
     // optimize graph and update state
     optimize_graph_and_update_state();
+}
+
+void VIOEstimator::add_stereo_factors(const std::vector<StereoFeature> & stereo_features)
+{
+    for (const auto & stereo_feature : stereo_features)
+    {
+        add_stereo_factor(stereo_feature.xl, stereo_feature.xr, stereo_feature.y, latest_pose_id, stereo_feature.landmark_id);
+    }
 }
 
 void VIOEstimator::initialize_pose(double qw, double qx, double qy, double qz,

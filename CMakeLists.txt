@@ -19,6 +19,7 @@ find_package(catkin REQUIRED COMPONENTS
 )
 
 find_package(GTSAM REQUIRED)
+find_package (Eigen3 3.3 REQUIRED NO_MODULE)
 
 ## System dependencies are found with CMake's conventionsg
 # find_package(Boost REQUIRED COMPONENTS system)
@@ -28,7 +29,10 @@ include_directories(
 )
 
 add_library(vio_gtsam SHARED src/vio_gtsam.cpp)
-target_link_libraries(vio_gtsam gtsam )
+target_link_libraries(vio_gtsam gtsam)
+
+add_library(attitude_initializer src/attitude_initializer.cpp)
+target_link_libraries(attitude_initializer Eigen3::Eigen)
 
 catkin_package(
 #  INCLUDE_DIRS include
@@ -55,4 +59,5 @@ target_link_libraries(vio_gtsam_node
    ${OpenCV_LIBRARIES}
    gtsam
    vio_gtsam
+   attitude_initializer
 )
