@@ -2,11 +2,13 @@
 
 #include "vio_gtsam_node.hpp"
 
-#include <message_filters/sync_policies/approximate_time.h> // message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image>
-#include <message_filters/subscriber.h> // message_filters::Subscriber<sensor_msgs::Image>
+#include "message_filters/sync_policies/approximate_time.h" // message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image>
+#include "message_filters/subscriber.h" // message_filters::Subscriber<sensor_msgs::Image>
 #include <cv_bridge/cv_bridge.h> // cv_bridge::toCvCopy
 #include <opencv2/video/tracking.hpp> // KLT
 #include <opencv2/calib3d/calib3d.hpp> // triangulatePoints
+
+#include <iostream> // cout
 
 VIONode::VIONode(ros::NodeHandle & n)
 {
@@ -21,21 +23,6 @@ VIONode::VIONode(ros::NodeHandle & n)
     proj_mat_l = (cv::Mat_<double>(3, 4) << fx, 0., cx, 0., 0., fy, cy, 0., 0,  0., 1., 0.);
     proj_mat_r = (cv::Mat_<double>(3, 4) << fx, 0., cx, b, 0., fy, cy, 0., 0,  0., 1., 0.);
 }
-
-void VIONode::run_gtsam(const std::vector<cv::Point2f> & features_l1, 
-    const std::vector<cv::Point2f> & features_r1,
-    const std::vector<int> & ids)
-{
-    // add latest stereo factor and run gtsam
-    std::vector<StereoFeature> stereo_features;
-    for (size_t i = 0; i < ids.size(); ++i)
-    {
-        StereoFeature stereo_feature(features_l1[i].x, features_r1[i].x, features_l1[i].y, ids[i]);
-        stereo_features.push_back(stereo_feature);
-    }
-    vio_estimator.stereo_update(stereo_features);
-}
-
 
 // ros images to opencv images
 cv::Mat VIONode::ros_img_to_cv_img(const sensor_msgs::ImageConstPtr img) const 
@@ -53,33 +40,26 @@ cv::Mat VIONode::ros_img_to_cv_img(const sensor_msgs::ImageConstPtr img) const
 }
 
 // transform 3D points to world frame given pose: (p_w = R_wc*p_c + t_wc)
-cv::Mat VIONode::transform_to_world(const cv::Mat & points3D_cam, 
-    const cv::Mat & R_wc,
-    const cv::Mat & t_wc) const
+vector<cv::Point3d> VIONode::transform_to_world(const cv::Mat & points3D_cam, 
+    const cv::Mat & R_wb,
+    const cv::Mat & t_wb) const
 {
-    cv::Mat points3D_w;
-    cv::Mat T_wc; // homogeneous transformation matrix
-    cv::Mat bottom_row = (cv::Mat_<double>(1, 4) << 0, 0, 0, 1);
-    cv::hconcat(R_wc, t_wc, T_wc);
-    cv::vconcat(T_wc, bottom_row, T_wc);
-
-    // transform point from camera frame to body frame
-
+    // transform point from camera frame to world frame via body frame
+    vector<cv::Point3d> points3D_w;
+    points3D_w.reserve(points3D_cam.rows);
+    for (int i = 0; i < points3D_cam.rows; ++i)
+    {
+        cv::Point3d pt_c = {points3D_cam.at<cv::Point3f>(i).x, 
+            points3D_cam.at<cv::Point3f>(i).y, 
+            points3D_cam.at<cv::Point3f>(i).z};
+        // convert to body frame
+        cv::Mat pt_b = R_bc*cv::Mat(pt_c) + t_bc;
+        // convert to world frame
+        cv::Mat pt_w = R_wb*cv::Mat(pt_b) + t_wb;
+        points3D_w.push_back(cv::Point3d(pt_w));
+    }    
     return points3D_w;
 }
-
-// GTSAM pose to opencv matrices
-void VIONode::gtsam_to_open_cv_pose(const Pose3 & gtsam_pose, cv::Mat& R_wb, cv::Mat& t_wb) const 
-{
-    Rot3 R = gtsam_pose.rotation();
-    Point3 t = gtsam_pose.translation();
-    R_wb = (cv::Mat_<double>(3,3) << R.r1().x(), R.r1().y(), R.r1().z(), 
-        R.r2().x(), R.r2().y(), R.r2().z(), 
-        R.r3().x(), R.r3().y(), R.r3().z());
-    t_wb = (cv::Mat_<double>(3,1) << t.x(), t.y(), t.z());
-}
-
-
 
 void VIONode::triangulate_features(const std::vector<cv::Point2f> & features_left, 
     const std::vector<cv::Point2f> & features_right, 
@@ -90,33 +70,79 @@ void VIONode::triangulate_features(const std::vector<cv::Point2f> & features_lef
     cv::convertPointsFromHomogeneous(points4D.t(), features_3D);
 }
 
-
-void VIONode::reset_feature_set()
+void VIONode::detect_new_features(std::vector<cv::Point2f> & features, 
+    std::vector<int> & strengths) const
 {
-    feature_set.features_l.clear();
-    feature_set.features_r.clear();
-    feature_set.ids.clear();
+    std::vector<cv::KeyPoint> keypoints;
+    bool nonmax_suppression = true;
+    const int fast_threshold = 20;
+
+    // FAST feature detector
+    cv::FAST(image_left_t0, keypoints, fast_threshold, nonmax_suppression);
+    cv::KeyPoint::convert(keypoints, features, std::vector<int>());
+
+    // Feature corner strengths
+    strengths.reserve(features.size());
+    for (const auto & keypoint : keypoints) strengths.push_back(keypoint.response); 
 }
 
-
-void VIONode::add_new_landmarks(const std::vector<cv::Point2f> & features_l0, 
-    const std::vector<cv::Point2f> & features_r0, 
-    const cv::Mat & points3D_w0, 
-    const std::vector<int> & ids)
+void VIONode::bucket_and_update_feature_set(const std::vector<cv::Point2f> & features, 
+    const std::vector<int> & strengths)
 {
-    // add new landmarks and their stereo factors
-    std::vector<StereoFeature> stereo_features;
-    for (size_t i = 0; i < ids.size(); ++i)
+    // sort features by strengths
+    const int num_buckets_per_axis = 10;
+    const int num_features_per_bucket = 3;
+    const int num_features_min = 200;
+    const int dim_bucket_x = img_width/num_buckets_per_axis;
+    const int dim_bucket_y = img_height/num_buckets_per_axis;
+
+
+    // iterate through features 
+    std::vector<int> buckets;
+    buckets.resize(num_buckets_per_axis*num_buckets_per_axis);
+    std::vector<int> idx;
+    for (size_t i = 0; i < features.size(); ++i)
     {
-        // TODO: CHECK DIRECTION i,0 or 0,i
-        Point3 pt(points3D_w0.at<double>(i,0), points3D_w0.at<double>(i,1), points3D_w0.at<double>(i,2));
-        vio_estimator.add_landmark_estimate(pt, ids[i]);
-        StereoFeature stereo_feature(features_l0[i].x, features_r0[i].x, features_l0[i].y, ids[i]);
-        stereo_features.push_back(stereo_feature);
+        // compute bucket idx
+        int x = features[i].x;
+        int y = features[i].y;
+
+        int bucket_idx = x/dim_bucket_x + (y*num_buckets_per_axis)/dim_bucket_y;
+
+        // check if bucket has space
+        if (buckets[bucket_idx] < num_features_per_bucket)
+        {
+            // add bucket counter
+            buckets[bucket_idx]++;
+            // add index to output
+            idx.push_back(i);
+            // leave loop if enough features found
+            if (idx.size() == num_features_min) break;
+        }
     }
-    vio_estimator.add_stereo_factors(stereo_features);
+
+    // clear everything and start over
+    reset_feature_set();
+    feature_set.features_l.resize(idx.size());
+    feature_set.ids.resize(idx.size());
+    for (size_t i = 0; i < idx.size(); ++i)
+    {
+        feature_set.features_l.push_back(features[i]);
+        feature_set.ids.push_back(feature_id);
+        feature_id++;
+    }
 }
 
+void VIONode::replace_all_features()
+{
+    // detect features in image
+    std::vector<cv::Point2f> features;
+    std::vector<int> strengths;
+    detect_new_features(features, strengths);
+
+    // bucket features in image
+    bucket_and_update_feature_set(features, strengths);
+}
 
 void VIONode::circular_matching(std::vector<cv::Point2f> & points_l_0, 
     std::vector<cv::Point2f> & points_r_0, 
@@ -171,85 +197,56 @@ void VIONode::circular_matching(std::vector<cv::Point2f> & points_l_0,
     }
 }
 
-void VIONode::update_feature_set(std::vector<cv::Point2f> & features_l1, std::vector<cv::Point2f> & features_r1)
+void VIONode::run_gtsam(const std::vector<cv::Point2f> & features_l1, 
+    const std::vector<cv::Point2f> & features_r1,
+    const std::vector<int> & ids)
 {
-    feature_set.features_l = features_l1;
-    feature_set.features_r = features_r1;
-}
-
-void VIONode::detect_new_features(std::vector<cv::Point2f> & features, 
-    std::vector<int> & strengths) const
-{
-    std::vector<cv::KeyPoint> keypoints;
-    bool nonmax_suppression = true;
-    const int fast_threshold = 20;
-
-    // FAST feature detector
-    cv::FAST(image_left_t0, keypoints, fast_threshold, nonmax_suppression);
-    cv::KeyPoint::convert(keypoints, features, std::vector<int>());
-
-    // Feature corner strengths
-    strengths.reserve(features.size());
-    for (const auto & keypoint : keypoints) strengths.push_back(keypoint.response); 
-}
-
-void VIONode::bucket_and_update_feature_set(const std::vector<cv::Point2f> & features, 
-    const std::vector<int> & strengths)
-{
-    // sort features by strengths
-    const int num_buckets_per_axis = 10;
-    const int num_features_per_bucket = 2;
-    const int num_features_min = 100;
-    const int dim_bucket_x = img_width/num_buckets_per_axis;
-    const int dim_bucket_y = img_height/num_buckets_per_axis;
-
-
-    // iterate through features 
-    std::vector<int> buckets;
-    buckets.resize(num_buckets_per_axis*num_buckets_per_axis);
-    std::vector<int> idx;
-    for (size_t i = 0; i < features.size(); ++i)
+    // add latest stereo factor and run gtsam
+    std::vector<StereoFeature> stereo_features;
+    for (size_t i = 0; i < ids.size(); ++i)
     {
-        // compute bucket idx
-        int x = features[i].x;
-        int y = features[i].y;
-
-        int bucket_idx = x/dim_bucket_x + (y*num_buckets_per_axis)/dim_bucket_y;
-
-        // check if bucket has space
-        if (buckets[bucket_idx] < num_features_per_bucket)
-        {
-            // add bucket counter
-            buckets[bucket_idx]++;
-            // add index to output
-            idx.push_back(i);
-            // leave loop if enough features found
-            if (idx.size() == num_features_min) break;
-        }
+        StereoFeature stereo_feature(features_l1[i].x, features_r1[i].x, features_l1[i].y, ids[i]);
+        stereo_features.push_back(stereo_feature);
     }
-
-    // clear everything and start over
-    reset_feature_set();
-    feature_set.features_l.resize(idx.size());
-    feature_set.ids.resize(idx.size());
-    for (size_t i = 0; i < idx.size(); ++i)
-    {
-        feature_set.features_l.push_back(features[i]);
-        feature_set.ids.push_back(feature_id);
-        feature_id++;
-    }
+    vio_estimator.stereo_update(stereo_features);
 }
 
-void VIONode::replace_all_features()
+// GTSAM pose to opencv matrices
+void VIONode::gtsam_to_open_cv_pose(const Pose3 & gtsam_pose, cv::Mat& R_wb, cv::Mat& t_wb) const 
 {
-    // detect features in image
-    std::vector<cv::Point2f> features;
-    std::vector<int> strengths;
-    detect_new_features(features, strengths);
-
-    // bucket features in image
-    bucket_and_update_feature_set(features, strengths);
+    Rot3 R = gtsam_pose.rotation();
+    Point3 t = gtsam_pose.translation();
+    R_wb = (cv::Mat_<double>(3,3) << R.r1().x(), R.r1().y(), R.r1().z(), 
+        R.r2().x(), R.r2().y(), R.r2().z(), 
+        R.r3().x(), R.r3().y(), R.r3().z());
+    t_wb = (cv::Mat_<double>(3,1) << t.x(), t.y(), t.z());
 }
+
+void VIONode::reset_feature_set()
+{
+    feature_set.features_l.clear();
+    feature_set.features_r.clear();
+    feature_set.ids.clear();
+}
+
+void VIONode::add_new_landmarks(const std::vector<cv::Point2f> & features_l0, 
+    const std::vector<cv::Point2f> & features_r0, 
+    const std::vector<cv::Point3d> & points3D_w0, 
+    const std::vector<int> & ids)
+{
+    // add new landmarks and their stereo factors
+    std::vector<StereoFeature> stereo_features;
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+        Point3 pt(points3D_w0[i].x, points3D_w0[i].y, points3D_w0[i].z);
+        vio_estimator.add_landmark_estimate(pt, ids[i]);
+        StereoFeature stereo_feature(features_l0[i].x, features_r0[i].x, features_l0[i].y, ids[i]);
+        std::cout << features_l0[i].x << " " << features_r0[i].x << " " << features_l0[i].y << endl; // why is third coordinate an integer??
+        stereo_features.push_back(stereo_feature);
+    }
+    vio_estimator.add_stereo_factors(stereo_features);
+}
+
 
 void VIONode::feature_tracking(const cv::Mat & image_left, const cv::Mat & image_right)
 {
@@ -274,6 +271,7 @@ void VIONode::feature_tracking(const cv::Mat & image_left, const cv::Mat & image
     {
         replace_all_features();
         replaced_features = true;
+        std::cout << "[vio_gtsam_node]: replaced features." << endl;
     }
 
     // track features between frames into next position and updates feature_set positions
@@ -283,16 +281,19 @@ void VIONode::feature_tracking(const cv::Mat & image_left, const cv::Mat & image
     std::vector<cv::Point2f> features_r1;
     circular_matching(features_l0, features_r0, features_l1, features_r1, feature_set.ids);
 
+    std::cout << "[vio_gtsam_node]: tracking " << features_l0.size() << "features." << endl;
+
     // if detected new features, add them as landmarks to gtsam graph
     if (replaced_features)
     {
         cv::Mat features_3D_l0;
         triangulate_features(feature_set.features_l, feature_set.features_r, features_3D_l0);
-        Pose3 gtsam_pose = vio_estimator.get_pose();
+        Pose3 gtsam_pose = vio_estimator.get_pose(); // a lot of this is bad, should use IMU prediction instead
+        // see the large example of stereovo
         cv::Mat R_wb;
         cv::Mat t_wb;
         gtsam_to_open_cv_pose(gtsam_pose, R_wb, t_wb);
-        cv::Mat features_3D_w0 = transform_to_world(features_3D_l0, R_wb, t_wb);
+        vector<cv::Point3d> features_3D_w0 = transform_to_world(features_3D_l0, R_wb, t_wb);
 
         // add new landmarks (stereo features at previous image) 
         add_new_landmarks(features_l0, features_r0, features_3D_w0, feature_set.ids);
@@ -314,16 +315,27 @@ void VIONode::stereo_callback(const sensor_msgs::ImageConstPtr& image_left, cons
         cv::Mat l = ros_img_to_cv_img(image_left);
         cv::Mat r = ros_img_to_cv_img(image_right);
         feature_tracking(l, r);
-        run_gtsam(feature_set.features_l, feature_set.features_r, feature_set.ids);
+        cout << "[vio_gtsam_node]: running gtsam itr #" << frame_id << endl;
+        if (frame_id > 1) run_gtsam(feature_set.features_l, feature_set.features_r, feature_set.ids);
     } 
 }
 
-void VIONode::initialize_estimator(int qw, int qx, int qy, int qz)
+void VIONode::initialize_estimator(double qw, double qx, double qy, double qz)
 {
     // initialize gtsam estimator
     vio_estimator.initialize_pose(qw, qx, qy, qz, 0.0, 0.0, 0.0); // initialize pose (attitude important)
     vio_estimator.init();
-    vio_estimator.test_odometry_plus_loop_closure();
+
+    // obtain body-camera extrinsics from estimator
+    Point3 r1 = vio_estimator.camera_params.R_bc.r1();
+    Point3 r2 = vio_estimator.camera_params.R_bc.r2();
+    Point3 r3 = vio_estimator.camera_params.R_bc.r3();
+    R_bc = (cv::Mat_<double>(3,3) << r1.x(), r1.y(), r1.z(),
+        r2.x(), r2.y(), r2.z(),
+        r3.x(), r3.y(), r3.z());
+    t_bc = (cv::Mat_<double>(3,1) << vio_estimator.camera_params.t_bc.x(), 
+        vio_estimator.camera_params.t_bc.y(), 
+        vio_estimator.camera_params.t_bc.z());
 }
 
 void VIONode::imu_callback(const sensor_msgs::Imu::ConstPtr& msg)
@@ -341,6 +353,7 @@ void VIONode::imu_callback(const sensor_msgs::Imu::ConstPtr& msg)
             double qw, qx, qy, qz;
             attitude_initializer.compute_orientation(num_imu_init_measurements_required, qw, qx, qy, qz);
             initialize_estimator(qw, qx, qy, qz);
+            cout << "[vio_gtsam_node]: initial quaternion: " << qw << " " << qx << " " << qy << " " << qz << endl;
         }
     } else if (state == STATE::RUNNING_VIO)
     {

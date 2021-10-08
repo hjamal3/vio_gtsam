@@ -5,6 +5,11 @@
  * @author Haidar Jamal
  */
 
+
+#ifndef ATTITUDE_INITIALIZER_H
+#define ATTITUDE_INITIALIZER_H
+#endif
+
 #include <eigen3/Eigen/Core> // attitude initializer
 
 struct AttitudeInitializer

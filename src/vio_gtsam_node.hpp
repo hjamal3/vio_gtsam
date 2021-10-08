@@ -1,9 +1,13 @@
+#ifndef VIO_NODE_H
+#define VIO_NODE_H
+#endif
+
 #include "vio_gtsam.hpp"
 #include "attitude_initializer.hpp"
 
-#include <ros/ros.h>
-#include <sensor_msgs/Image.h> // sensor_msgs::ImageConstPtr
-#include <sensor_msgs/Imu.h> // sensor_msgs::Imu::ConstPtr
+#include "ros/ros.h"
+#include "sensor_msgs/Image.h" // sensor_msgs::ImageConstPtr
+#include "sensor_msgs/Imu.h" // sensor_msgs::Imu::ConstPtr
 #include <opencv2/imgproc/imgproc.hpp> // cv::Mat
 
 using namespace std;
@@ -63,6 +67,35 @@ private:
     static constexpr int num_imu_init_measurements_required = imu_hz*seconds_to_init_imu;
     AttitudeInitializer attitude_initializer;
 
+    // camera body frame transformation
+    cv::Mat R_bc;
+    cv::Mat t_bc;
+
+    cv::Mat ros_img_to_cv_img(const sensor_msgs::ImageConstPtr img) const;
+
+    vector<cv::Point3d> transform_to_world(const cv::Mat & points3D_cam, 
+        const cv::Mat & R_wb,
+        const cv::Mat & t_wb) const;
+
+    void triangulate_features(const std::vector<cv::Point2f> & points_left, 
+        const std::vector<cv::Point2f> & points_right, 
+        cv::Mat & points3D) const;
+
+    void detect_new_features(std::vector<cv::Point2f> & points, 
+        std::vector<int> & response_strengths) const;
+
+    void bucket_and_update_feature_set(const std::vector<cv::Point2f> & features, 
+        const std::vector<int> & strengths);
+
+    void replace_all_features();
+
+    void circular_matching(std::vector<cv::Point2f> & points_l_0, 
+        std::vector<cv::Point2f> & points_r_0, 
+        std::vector<cv::Point2f> & points_l_1, 
+        std::vector<cv::Point2f> & points_r_1,
+        std::vector<int> & ids) const;
+
+
     void run_gtsam(const std::vector<cv::Point2f> & features_l1, 
         const std::vector<cv::Point2f> & features_r1,
         const std::vector<int> & ids);
@@ -71,41 +104,15 @@ private:
 
     void add_new_landmarks(const std::vector<cv::Point2f> & features_l0, 
         const std::vector<cv::Point2f> & features_r0, 
-        const cv::Mat & points3D_w0, 
+        const std::vector<cv::Point3d> & points3D_w0, 
         const std::vector<int> & ids);
 
     void imu_callback(const sensor_msgs::Imu::ConstPtr& msg);
 
-    cv::Mat ros_img_to_cv_img(const sensor_msgs::ImageConstPtr img) const;
-
-    cv::Mat transform_to_world(const cv::Mat & points3D_cam, 
-        const cv::Mat & R_wb,
-        const cv::Mat & t_wb) const;
-
-    void replace_all_features();
-
     void feature_tracking(const cv::Mat & image_left, const cv::Mat & image_right);
-
-    void circular_matching(std::vector<cv::Point2f> & points_l_0, 
-        std::vector<cv::Point2f> & points_r_0, 
-        std::vector<cv::Point2f> & points_l_1, 
-        std::vector<cv::Point2f> & points_r_1,
-        std::vector<int> & ids) const;
 
     void reset_feature_set();
 
-    void update_feature_set(std::vector<cv::Point2f> & features_l1, 
-        std::vector<cv::Point2f> & features_r1);
+    void initialize_estimator(double qw, double qx, double qy, double qz);
 
-    void detect_new_features(std::vector<cv::Point2f> & points, 
-        std::vector<int> & response_strengths) const;
-
-    void bucket_and_update_feature_set(const std::vector<cv::Point2f> & features, 
-        const std::vector<int> & strengths);
-
-    void triangulate_features(const std::vector<cv::Point2f> & points_left, 
-        const std::vector<cv::Point2f> & points_right, 
-        cv::Mat & points3D) const;
-
-    void initialize_estimator(int qw, int qx, int qy, int qz);
 };

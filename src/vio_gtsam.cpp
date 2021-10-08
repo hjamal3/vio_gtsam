@@ -66,7 +66,7 @@ void VIOEstimator::init()
     graph.add(PriorFactor<Vector3>(V(0), prev_vel, velocity_noise_model));
     graph.add(PriorFactor<imuBias::ConstantBias>(B(0), imu_params.prior_imu_bias, imu_params.bias_noise_model));
 
-    if (print_output) initial_estimate.print("\nInitial Estimate:\n");
+    if (print_output) initial_estimate.print("[vio_gtsam]: Initial Estimate:\n");
 
     // Set optimizer parameters 
     // Stop iterating once the change in error between steps is less than this value
@@ -84,7 +84,7 @@ void VIOEstimator::optimize_graph_and_update_state()
     GaussNewtonOptimizer optimizer(graph, initial_estimate, parameters);
     Values result = optimizer.optimize();
 
-    if (print_output) result.print("Final Result:\n");
+    if (print_output) result.print("[vio_gtsam]: Final Result:\n");
 
     // this frame result is set to next frame initial estimate
     initial_estimate = result;
@@ -115,6 +115,7 @@ void VIOEstimator::add_odometry_factor(Pose3 pose, size_t pose_id_prev, size_t p
 // add new 3D point
 void VIOEstimator::add_landmark_estimate(Point3 l, size_t landmark_id)
 {
+    cout << "adding L: " << l.x() << " " << l.y() << " " << l.z() << endl;
     initial_estimate.insert(L(landmark_id), l);
 }
 

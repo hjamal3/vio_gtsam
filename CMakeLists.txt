@@ -18,6 +18,11 @@ find_package(catkin REQUIRED COMPONENTS
   message_filters
 )
 
+find_package(Boost)
+include_directories(
+    ${BOOST_INCLUDE_DIR}
+)
+
 find_package(GTSAM REQUIRED)
 find_package (Eigen3 3.3 REQUIRED NO_MODULE)
 

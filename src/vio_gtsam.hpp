@@ -1,4 +1,7 @@
-#define BOOST_BIND_GLOBAL_PLACEHOLDERS 0 // boost warning
+#ifndef VIO_GTSAM_H
+#define VIO_GTSAM_H
+#endif
+
 #include <gtsam/geometry/Cal3_S2Stereo.h> // Cal3_S2Stereo
 
 #include <gtsam/geometry/Pose3.h> // Pose3
