@@ -11,6 +11,7 @@
 #include <gtsam/inference/Symbol.h> // symbol_shorthand
 #include <gtsam/slam/PriorFactor.h>
 #include <gtsam/slam/BetweenFactor.h>
+#include <gtsam/nonlinear/NonlinearEquality.h> // NonlinearEquality
 #include <gtsam/nonlinear/Marginals.h> // Marginals
 
 
@@ -62,6 +63,7 @@ void VIOEstimator::init()
     prev_bias = imuBias::ConstantBias(imu_params.prior_imu_bias);
 
     // Add priors for pose and imu biases to graph - mean and a noise model (covariance matrix)
+    graph.emplace_shared<NonlinearEquality<Pose3> >(X(0), prev_pose);
     graph.add(PriorFactor<Pose3>(X(0), prev_pose, pose_prior_noise));
     graph.add(PriorFactor<Vector3>(V(0), prev_vel, velocity_noise_model));
     graph.add(PriorFactor<imuBias::ConstantBias>(B(0), imu_params.prior_imu_bias, imu_params.bias_noise_model));
@@ -104,6 +106,7 @@ void VIOEstimator::add_stereo_factor(int xl, int xr, int y, size_t pose_id, size
 {
     graph.emplace_shared<GenericStereoFactor<Pose3,Point3>>(StereoPoint2(xl, xr, y), 
         camera_params.stereo_model, X(pose_id), L(landmark_id), camera_params.K, camera_params.body_P_sensor);
+    cout << "[vio_gtsam]: adding stereo factor between pose " << pose_id << " and landmark " << landmark_id << endl;
 }
 
 // add odometry factor to graph. for example from PnP perhaps. unused for now.
@@ -115,7 +118,7 @@ void VIOEstimator::add_odometry_factor(Pose3 pose, size_t pose_id_prev, size_t p
 // add new 3D point
 void VIOEstimator::add_landmark_estimate(Point3 l, size_t landmark_id)
 {
-    cout << "adding L: " << l.x() << " " << l.y() << " " << l.z() << endl;
+    cout << "[vio_gtsam]: adding L: " << l.x() << " " << l.y() << " " << l.z() << " #" << landmark_id << endl;
     initial_estimate.insert(L(landmark_id), l);
 }
 
@@ -123,6 +126,7 @@ void VIOEstimator::add_landmark_estimate(Point3 l, size_t landmark_id)
 void VIOEstimator::add_pose_estimate(Pose3 pose, size_t pose_id)
 {
     initial_estimate.insert(X(pose_id), pose);
+    cout << "[vio_gtsam]: adding pose estimate at #" << pose_id << endl;
 }
 
 void VIOEstimator::add_velocity_estimate(Vector3 vel, size_t pose_id)
@@ -155,6 +159,7 @@ void VIOEstimator::create_imu_factor()
         B(latest_pose_id-1), B(latest_pose_id),
         preint_imu_combined);
 
+    cout << "[vio_gtsam]: adding imu factor between pose #" << latest_pose_id - 1 << " and " << latest_pose_id << endl;
     graph.add(imu_factor);
 }
 
@@ -164,23 +169,40 @@ void VIOEstimator::stereo_update(const std::vector<StereoFeature> & stereo_featu
     // update pose_id
     latest_pose_id++;
 
-    // add all new feature points to graph
-    for (const auto & stereo_feature : stereo_features)
-    {
-        add_stereo_factor(stereo_feature.xl, stereo_feature.xr, stereo_feature.y, latest_pose_id, stereo_feature.landmark_id);
-    }
-
-    // add IMU factor to graph
-    create_imu_factor();
-
     // add new state estimate
     NavState prop_state = imu_params.imu_preintegrated_->predict(prev_state, prev_bias);
     add_pose_estimate(prop_state.pose(), latest_pose_id);
     add_velocity_estimate(prop_state.v(), latest_pose_id);
     add_bias_estimate(prev_bias, latest_pose_id); // carries over
 
-    // optimize graph and update state
-    optimize_graph_and_update_state();
+    // add IMU factor to graph
+    create_imu_factor();
+
+    // if enough stereo points
+    const int min_stereo_points = 5000;
+    if (stereo_features.size() > min_stereo_points)
+    {
+        cout << "[vio_gtsam]: running stereo_update on pose #" << latest_pose_id << endl;
+
+        // add stereo factors to graph
+        for (const auto & stereo_feature : stereo_features)
+        {
+            add_stereo_factor(stereo_feature.xl, stereo_feature.xr, stereo_feature.y, latest_pose_id, stereo_feature.landmark_id);
+        }
+
+        // optimize graph and update state
+        optimize_graph_and_update_state();
+    } else 
+    {
+        cout << "[vio_gtsam]: propagating state using imu only " << latest_pose_id << endl;
+        // use IMU to propagate state
+        prev_state = prop_state;
+        prev_pose = prev_state.pose();
+        imu_params.imu_preintegrated_->resetIntegrationAndSetBias(prev_bias);
+
+    }
+    cout << "[vio_gtsam]: latest pose estimate: " << endl;
+    cout << prev_pose << endl;
 }
 
 void VIOEstimator::add_stereo_factors(const std::vector<StereoFeature> & stereo_features)
@@ -226,12 +248,12 @@ void VIOEstimator::test_odometry_plus_loop_closure()
     // with camera images. We will use another Between Factor to enforce this constraint:
     add_odometry_factor(T_2, 4, 1);
 
-    if (print_output) graph.print("\nFactor Graph:\n"); // print
+    if (print_output) graph.print("\n[vio_gtsam]: Factor Graph:\n"); // print
     add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, -0.2), Point3(2.3, 0.1, 0.0)), 1);
     add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, M_PI_2), Point3(4.1, 0.1, 0.0)), 2);
     add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, M_PI), Point3(4.0, 2.0, 0.0)), 3);
     add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, -M_PI_2), Point3(2.1, 2.1, 0.0)), 4);
 
-    if (print_output) initial_estimate.print("\nInitial Estimate:\n"); // print
+    if (print_output) initial_estimate.print("\n[vio_gtsam]: Initial Estimate:\n"); // print
     optimize_graph_and_update_state();
 }

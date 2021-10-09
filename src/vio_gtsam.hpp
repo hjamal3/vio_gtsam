@@ -34,12 +34,12 @@ struct StereoFeature
 struct CameraParameters
 {
     // Stereo camera: double fx, double fy, double s, double u0, double v0, double b (baseline)
-    static constexpr double fx = 1000;
-    static constexpr double fy = 1000;
+    static constexpr double fx = 220.44908;
+    static constexpr double fy = 220.44908;
     static constexpr double s = 0.0; // skew
-    static constexpr double cx = 320; // offset x
-    static constexpr double cy = 240; // offset y
-    static constexpr double b = 0.2; // baseline in meters
+    static constexpr double cx = 222.01352; // offset x
+    static constexpr double cy = 146.41498; // offset y
+    static constexpr double b = 0.04979077254; // baseline in meters
 
     // Stereo camera intrinsic calibration object
     Cal3_S2Stereo::shared_ptr K;
@@ -75,7 +75,7 @@ struct IMUParameters
     const double sigma_bias = 1e-3; 
     noiseModel::Diagonal::shared_ptr bias_noise_model = noiseModel::Isotropic::Sigma(6,sigma_bias);
 
-    double dt = 0.005; // sampling time (s)
+    double dt = 0.008; // sampling time (s)
 
     static constexpr double g = 9.80665;
 
@@ -104,7 +104,7 @@ public:
     void test_odometry_plus_loop_closure();
 
     size_t get_pose_id() const { return latest_pose_id; }
-    size_t get_landmark_id() const { return latest_landmark_id; }
+
     Pose3 get_pose() const { return prev_pose; }
     Vector3 get_vel() const { return prev_vel; }
 
@@ -145,7 +145,6 @@ private:
 
     // latest pose id, updates every time a new image is received
     size_t latest_pose_id = 0; 
-    size_t latest_landmark_id = 0;
 
     // Odometry model (pose estimate between frames using PnP or ICP etc): rad, rad, rad, m, m, m
     const double angular_var = 0.1;

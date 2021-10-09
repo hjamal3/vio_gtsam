@@ -10,6 +10,9 @@
 
 #include <iostream> // cout
 
+// try pure integration with imu
+// compare y values
+
 VIONode::VIONode(ros::NodeHandle & n)
 {
     imu_subscriber = n.subscribe(imu_topic, 1000, &VIONode::imu_callback,  this);
@@ -65,9 +68,13 @@ void VIONode::triangulate_features(const std::vector<cv::Point2f> & features_lef
     const std::vector<cv::Point2f> & features_right, 
     cv::Mat & features_3D) const
 {
-    cv::Mat points4D;
-    cv::triangulatePoints(proj_mat_l, proj_mat_r, features_left, features_right, points4D);
-    cv::convertPointsFromHomogeneous(points4D.t(), features_3D);
+    assert(features_left.size() == features_right.size());
+    if (features_left.size() > 0)
+    {
+        cv::Mat points4D;
+        cv::triangulatePoints(proj_mat_l, proj_mat_r, features_left, features_right, points4D);
+        cv::convertPointsFromHomogeneous(points4D.t(), features_3D);
+    }
 }
 
 void VIONode::detect_new_features(std::vector<cv::Point2f> & features, 
@@ -79,7 +86,7 @@ void VIONode::detect_new_features(std::vector<cv::Point2f> & features,
 
     // FAST feature detector
     cv::FAST(image_left_t0, keypoints, fast_threshold, nonmax_suppression);
-    cv::KeyPoint::convert(keypoints, features, std::vector<int>());
+    cv::KeyPoint::convert(keypoints, features);
 
     // Feature corner strengths
     strengths.reserve(features.size());
@@ -177,14 +184,20 @@ void VIONode::circular_matching(std::vector<cv::Point2f> & points_l_0,
     int idx_correction = 0;
     for (size_t i = 0; i < status3.size(); ++i)
     {  
+        const cv::Point2f & pt0 = points_l_0.at(i - idx_correction);
         const cv::Point2f & pt1 = points_r_0.at(i - idx_correction);
         const cv::Point2f & pt2 = points_r_1.at(i - idx_correction);
         const cv::Point2f & pt3 = points_l_1.at(i - idx_correction);
         const cv::Point2f & pt0_r = points_l_0_return.at(i - idx_correction);
+        const float max_match_y_distance = 2.0f; // pixels
+        const float min_match_disparity = 2.0f; // pixels
         if ((status3.at(i) == 0) || (pt3.x < 0) || (pt3.y < 0) ||
             (status2.at(i) == 0) || (pt2.x < 0) || (pt2.y < 0) ||
             (status1.at(i) == 0) || (pt1.x < 0) || (pt1.y < 0) ||
-            (status0.at(i) == 0) || (pt0_r.x < 0) || (pt0_r.y < 0))   
+            (status0.at(i) == 0) || (pt0_r.x < 0) || (pt0_r.y < 0) ||
+            (std::abs(pt0.y - pt1.y) > max_match_y_distance) || // rectified image - y values same
+            (std::abs(pt2.y - pt3.y) > max_match_y_distance) ||
+            (cv::norm(pt0 - pt3)) < min_match_disparity) // keep only high disparity points
         {
             points_l_0.erase(points_l_0.begin() + (i - idx_correction));
             points_r_0.erase(points_r_0.begin() + (i - idx_correction));
@@ -241,7 +254,6 @@ void VIONode::add_new_landmarks(const std::vector<cv::Point2f> & features_l0,
         Point3 pt(points3D_w0[i].x, points3D_w0[i].y, points3D_w0[i].z);
         vio_estimator.add_landmark_estimate(pt, ids[i]);
         StereoFeature stereo_feature(features_l0[i].x, features_r0[i].x, features_l0[i].y, ids[i]);
-        std::cout << features_l0[i].x << " " << features_r0[i].x << " " << features_l0[i].y << endl; // why is third coordinate an integer??
         stereo_features.push_back(stereo_feature);
     }
     vio_estimator.add_stereo_factors(stereo_features);
@@ -281,7 +293,7 @@ void VIONode::feature_tracking(const cv::Mat & image_left, const cv::Mat & image
     std::vector<cv::Point2f> features_r1;
     circular_matching(features_l0, features_r0, features_l1, features_r1, feature_set.ids);
 
-    std::cout << "[vio_gtsam_node]: tracking " << features_l0.size() << "features." << endl;
+    std::cout << "[vio_gtsam_node]: tracking " << features_l0.size() << " features." << endl;
 
     // if detected new features, add them as landmarks to gtsam graph
     if (replaced_features)
@@ -315,8 +327,11 @@ void VIONode::stereo_callback(const sensor_msgs::ImageConstPtr& image_left, cons
         cv::Mat l = ros_img_to_cv_img(image_left);
         cv::Mat r = ros_img_to_cv_img(image_right);
         feature_tracking(l, r);
-        cout << "[vio_gtsam_node]: running gtsam itr #" << frame_id << endl;
-        if (frame_id > 1) run_gtsam(feature_set.features_l, feature_set.features_r, feature_set.ids);
+        if (frame_id > 1)
+        {
+            run_gtsam(feature_set.features_l, feature_set.features_r, feature_set.ids);
+            cout << "[vio_gtsam_node]: running gtsam itr #" << frame_id - 1 << endl;
+        }
     } 
 }
 
