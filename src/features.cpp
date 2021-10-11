@@ -13,6 +13,8 @@ void Features::init(double fx, double fy, double cx, double cy, double b, int _i
     proj_mat_r = (cv::Mat_<double>(3, 4) << fx, 0., cx, b, 0., fy, cy, 0., 0,  0., 1., 0.);
     img_width = _img_width;
     img_height = _img_height;
+    len_bucket_x = img_width/num_buckets_per_axis;
+    len_bucket_y = img_height/num_buckets_per_axis;
 }
 
 void Features::triangulate_features(const std::vector<cv::Point2f> & features_left, 
@@ -32,8 +34,6 @@ void Features::detect_new_features(std::vector<cv::Point2f> & features,
     std::vector<int> & strengths) const
 {
     std::vector<cv::KeyPoint> keypoints;
-    bool nonmax_suppression = true;
-    const int fast_threshold = 20;
 
     // FAST feature detector
     cv::FAST(image_left_t0, keypoints, fast_threshold, nonmax_suppression);
@@ -47,26 +47,18 @@ void Features::detect_new_features(std::vector<cv::Point2f> & features,
 void Features::bucket_and_update_feature_set(const std::vector<cv::Point2f> & features, 
     const std::vector<int> & strengths)
 {
-    // sort features by strengths
-    const int num_buckets_per_axis = 10;
-    const int num_features_per_bucket = 3;
-    const int num_features_min = 200;
-    const int dim_bucket_x = img_width/num_buckets_per_axis;
-    const int dim_bucket_y = img_height/num_buckets_per_axis;
-
-    cout << "[features]: dim_bucket_x & y: " << dim_bucket_x << " " << dim_bucket_y << endl;
-
     // iterate through features 
     std::vector<int> buckets;
     buckets.resize(num_buckets_per_axis*num_buckets_per_axis);
     std::vector<int> idx;
+
     for (size_t i = 0; i < features.size(); ++i)
     {
         // compute bucket idx
         int x = features[i].x;
         int y = features[i].y;
 
-        int bucket_idx = x/dim_bucket_x + (y*num_buckets_per_axis)/dim_bucket_y;
+        int bucket_idx = x/len_bucket_x + (y*num_buckets_per_axis)/len_bucket_y;
 
         // check if bucket has space
         if (buckets[bucket_idx] < num_features_per_bucket)
@@ -80,18 +72,19 @@ void Features::bucket_and_update_feature_set(const std::vector<cv::Point2f> & fe
         }
     }
 
-    cout << "[features]: this many features post bucketing: " << idx.size() << endl;
 
     // clear everything and start over
     reset_feature_set();
-    feature_set.features_l.resize(idx.size());
-    feature_set.ids.resize(idx.size());
+    feature_set.features_l.reserve(idx.size());
+    feature_set.ids.reserve(idx.size());
     for (size_t i = 0; i < idx.size(); ++i)
     {
         feature_set.features_l.push_back(features[idx[i]]);
         feature_set.ids.push_back(feature_id);
         feature_id++;
     }
+    cout << "[features]: this many features post bucketing: " << feature_set.features_l.size() << endl;
+
 }
 
 void Features::circular_matching(std::vector<cv::Point2f> & points_l_0, 
@@ -141,9 +134,6 @@ void Features::circular_matching(std::vector<cv::Point2f> & points_l_0,
             (std::abs(pt0.x - pt1.x) < min_stereo_x_disparity) || // keep only high disparity in a stereo pair
             (cv::norm(pt0-pt0_r)) > return_distance) 
         {
-            cout << pt0 << endl;
-            cout << pt1 << endl;
-            cout << " " << endl;
             points_l_0.erase(points_l_0.begin() + (i - idx_correction));
             points_r_0.erase(points_r_0.begin() + (i - idx_correction));
             points_r_1.erase(points_r_1.begin() + (i - idx_correction));
@@ -182,7 +172,7 @@ void Features::feature_tracking(const cv::Mat & image_left, const cv::Mat & imag
 
     // if ! enough features in current feature set, replace all of them
     replaced_features = false;
-    const int min_num_features = 100;
+    const int min_num_features = 1000; // do it always  
     if (feature_set.get_size() < min_num_features)
     {
         cout << "[features]: replacing all features." << endl;

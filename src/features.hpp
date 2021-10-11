@@ -37,7 +37,7 @@ private:
         const float min_stereo_x_disparity = 1.0f; // pixels
 
         // minimum motion of feature
-        const float min_match_disparity = 2.0f; // pixels
+        const float min_match_disparity = 3.0f; // pixels
 
         // minimum return distance 
         const float return_distance = 1.0f; // pixels
@@ -55,6 +55,16 @@ private:
 
         size_t feature_id = 0;
         size_t frame_id = 0;
+
+        // sort features by strengths
+        const int num_buckets_per_axis = 10;
+        const int num_features_per_bucket = 3;
+        const int num_features_min = 300;
+        int len_bucket_x; // depends on img_size
+        int len_bucket_y;
+
+        bool nonmax_suppression = true;
+        const int fast_threshold = 20;
 
         void detect_new_features(std::vector<cv::Point2f> & points, 
             std::vector<int> & response_strengths) const;

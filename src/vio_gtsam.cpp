@@ -189,8 +189,8 @@ void VIOEstimator::stereo_update(const std::vector<StereoFeature> & stereo_featu
     // add IMU factor to graph
     create_imu_factor();
 
-    // if enough stereo points
-    const int min_stereo_points = 10;
+    // if enough stereo points then propagate state with stereo
+    const int min_stereo_points = 5;
     if (stereo_features.size() > min_stereo_points)
     {
         cout << "[vio_gtsam]: propagating state using stereo on pose # " << latest_pose_id << endl;

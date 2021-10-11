@@ -8,6 +8,8 @@
 
 #include <iostream> // cout
 
+// going into circular matching not = output
+
 VIONode::VIONode(ros::NodeHandle & n)
 {
     imu_subscriber = n.subscribe(imu_topic, 1000, &VIONode::imu_callback,  this);
