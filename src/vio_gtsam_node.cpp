@@ -5,13 +5,8 @@
 #include "message_filters/sync_policies/approximate_time.h" // message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image>
 #include "message_filters/subscriber.h" // message_filters::Subscriber<sensor_msgs::Image>
 #include <cv_bridge/cv_bridge.h> // cv_bridge::toCvCopy
-#include <opencv2/video/tracking.hpp> // KLT
-#include <opencv2/calib3d/calib3d.hpp> // triangulatePoints
 
 #include <iostream> // cout
-
-// try pure integration with imu
-// compare y values
 
 VIONode::VIONode(ros::NodeHandle & n)
 {
@@ -23,8 +18,8 @@ VIONode::VIONode(ros::NodeHandle & n)
     const float cx = vio_estimator.camera_params.cx;
     const float cy = vio_estimator.camera_params.cy;
     const float b = vio_estimator.camera_params.b;
-    proj_mat_l = (cv::Mat_<double>(3, 4) << fx, 0., cx, 0., 0., fy, cy, 0., 0,  0., 1., 0.);
-    proj_mat_r = (cv::Mat_<double>(3, 4) << fx, 0., cx, b, 0., fy, cy, 0., 0,  0., 1., 0.);
+
+    features.init(fx, fy, cx, cy, b, img_width, img_height);
 }
 
 // ros images to opencv images
@@ -64,150 +59,41 @@ vector<cv::Point3d> VIONode::transform_to_world(const cv::Mat & points3D_cam,
     return points3D_w;
 }
 
-void VIONode::triangulate_features(const std::vector<cv::Point2f> & features_left, 
-    const std::vector<cv::Point2f> & features_right, 
-    cv::Mat & features_3D) const
+
+void VIONode::stereo_callback(const sensor_msgs::ImageConstPtr& image_left, const sensor_msgs::ImageConstPtr& image_right)
 {
-    assert(features_left.size() == features_right.size());
-    if (features_left.size() > 0)
+    if (state == STATE::RUNNING_VIO)
     {
-        cv::Mat points4D;
-        cv::triangulatePoints(proj_mat_l, proj_mat_r, features_left, features_right, points4D);
-        cv::convertPointsFromHomogeneous(points4D.t(), features_3D);
-    }
-}
+        cv::Mat l = ros_img_to_cv_img(image_left);
+        cv::Mat r = ros_img_to_cv_img(image_right);
 
-void VIONode::detect_new_features(std::vector<cv::Point2f> & features, 
-    std::vector<int> & strengths) const
-{
-    std::vector<cv::KeyPoint> keypoints;
-    bool nonmax_suppression = true;
-    const int fast_threshold = 20;
+        bool replaced_features = false;
+        features.feature_tracking(l, r, replaced_features);
 
-    // FAST feature detector
-    cv::FAST(image_left_t0, keypoints, fast_threshold, nonmax_suppression);
-    cv::KeyPoint::convert(keypoints, features);
-
-    // Feature corner strengths
-    strengths.reserve(features.size());
-    for (const auto & keypoint : keypoints) strengths.push_back(keypoint.response); 
-}
-
-void VIONode::bucket_and_update_feature_set(const std::vector<cv::Point2f> & features, 
-    const std::vector<int> & strengths)
-{
-    // sort features by strengths
-    const int num_buckets_per_axis = 10;
-    const int num_features_per_bucket = 3;
-    const int num_features_min = 200;
-    const int dim_bucket_x = img_width/num_buckets_per_axis;
-    const int dim_bucket_y = img_height/num_buckets_per_axis;
-
-
-    // iterate through features 
-    std::vector<int> buckets;
-    buckets.resize(num_buckets_per_axis*num_buckets_per_axis);
-    std::vector<int> idx;
-    for (size_t i = 0; i < features.size(); ++i)
-    {
-        // compute bucket idx
-        int x = features[i].x;
-        int y = features[i].y;
-
-        int bucket_idx = x/dim_bucket_x + (y*num_buckets_per_axis)/dim_bucket_y;
-
-        // check if bucket has space
-        if (buckets[bucket_idx] < num_features_per_bucket)
+        // if detected new features, add them as landmarks to gtsam graph
+        if (replaced_features)
         {
-            // add bucket counter
-            buckets[bucket_idx]++;
-            // add index to output
-            idx.push_back(i);
-            // leave loop if enough features found
-            if (idx.size() == num_features_min) break;
+            cv::Mat features_3D_l0;
+            features.triangulate_features(features.feature_set.features_l_prev, features.feature_set.features_r_prev, features_3D_l0);
+            Pose3 gtsam_pose = vio_estimator.get_pose();
+            // see the large example of stereovo
+            cv::Mat R_wb;
+            cv::Mat t_wb;
+            gtsam_to_open_cv_pose(gtsam_pose, R_wb, t_wb);
+            vector<cv::Point3d> features_3D_w0 = transform_to_world(features_3D_l0, R_wb, t_wb);
+
+            // add new landmarks (stereo features at previous image) 
+            add_new_landmarks(features.feature_set.features_l_prev, features.feature_set.features_r_prev, features_3D_w0, features.feature_set.ids);
         }
-    }
 
-    // clear everything and start over
-    reset_feature_set();
-    feature_set.features_l.resize(idx.size());
-    feature_set.ids.resize(idx.size());
-    for (size_t i = 0; i < idx.size(); ++i)
-    {
-        feature_set.features_l.push_back(features[i]);
-        feature_set.ids.push_back(feature_id);
-        feature_id++;
-    }
-}
-
-void VIONode::replace_all_features()
-{
-    // detect features in image
-    std::vector<cv::Point2f> features;
-    std::vector<int> strengths;
-    detect_new_features(features, strengths);
-
-    // bucket features in image
-    bucket_and_update_feature_set(features, strengths);
-}
-
-void VIONode::circular_matching(std::vector<cv::Point2f> & points_l_0, 
-    std::vector<cv::Point2f> & points_r_0, 
-    std::vector<cv::Point2f> & points_l_1, 
-    std::vector<cv::Point2f> & points_r_1,
-    std::vector<int> & ids) const
-{
-    std::vector<cv::Point2f> points_l_0_return;   
-    std::vector<float> err;         
-    
-    cv::Size win_size = cv::Size(20,20); // Lucas-Kanade optical flow window size                                                                                          
-    cv::TermCriteria term_crit = cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, 0.01);
-
-    std::vector<uchar> status0;
-    std::vector<uchar> status1;
-    std::vector<uchar> status2;
-    std::vector<uchar> status3;
-
-    // sparse iterative version of the Lucas-Kanade optical flow in pyramids
-    // To do: reuse pyramids
-    cv::calcOpticalFlowPyrLK(image_left_t0, image_right_t0, points_l_0, points_r_0, status0, err, 
-        win_size, 3, term_crit, cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 0.01);
-    cv::calcOpticalFlowPyrLK(image_right_t0, image_right_t1, points_r_0, points_r_1, status1, err, 
-        win_size, 3, term_crit, cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 0.01);
-    cv::calcOpticalFlowPyrLK(image_right_t1, image_left_t1, points_r_1, points_l_1, status2, err, 
-        win_size, 3, term_crit, cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 0.01);
-    cv::calcOpticalFlowPyrLK(image_left_t1, image_left_t0, points_l_1, points_l_0_return, status3, err, 
-        win_size, 3, term_crit, cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 0.01);
-
-    // remove unmatched features after circular matching
-    // To do: add distance check (vertical direction)
-    int idx_correction = 0;
-    for (size_t i = 0; i < status3.size(); ++i)
-    {  
-        const cv::Point2f & pt0 = points_l_0.at(i - idx_correction);
-        const cv::Point2f & pt1 = points_r_0.at(i - idx_correction);
-        const cv::Point2f & pt2 = points_r_1.at(i - idx_correction);
-        const cv::Point2f & pt3 = points_l_1.at(i - idx_correction);
-        const cv::Point2f & pt0_r = points_l_0_return.at(i - idx_correction);
-        const float max_match_y_distance = 2.0f; // pixels
-        const float min_match_disparity = 2.0f; // pixels
-        if ((status3.at(i) == 0) || (pt3.x < 0) || (pt3.y < 0) ||
-            (status2.at(i) == 0) || (pt2.x < 0) || (pt2.y < 0) ||
-            (status1.at(i) == 0) || (pt1.x < 0) || (pt1.y < 0) ||
-            (status0.at(i) == 0) || (pt0_r.x < 0) || (pt0_r.y < 0) ||
-            (std::abs(pt0.y - pt1.y) > max_match_y_distance) || // rectified image - y values same
-            (std::abs(pt2.y - pt3.y) > max_match_y_distance) ||
-            (cv::norm(pt0 - pt3)) < min_match_disparity) // keep only high disparity points
+        if (frame_id > 1)
         {
-            points_l_0.erase(points_l_0.begin() + (i - idx_correction));
-            points_r_0.erase(points_r_0.begin() + (i - idx_correction));
-            points_r_1.erase(points_r_1.begin() + (i - idx_correction));
-            points_l_1.erase(points_l_1.begin() + (i - idx_correction));
-            points_l_0_return.erase(points_l_0_return.begin() + (i - idx_correction));
-            ids.erase(ids.begin() + (i - idx_correction));
-            idx_correction++;
+            cout << "[vio_gtsam_node]: running gtsam itr #" << frame_id - 1 << endl;
+            run_gtsam(features.feature_set.features_l, features.feature_set.features_r, features.feature_set.ids);
+            cout << "\n[vio_gtsam_node]: *************************\n" << endl;
         }
-    }
+        frame_id++;
+    } 
 }
 
 void VIONode::run_gtsam(const std::vector<cv::Point2f> & features_l1, 
@@ -235,12 +121,6 @@ void VIONode::gtsam_to_open_cv_pose(const Pose3 & gtsam_pose, cv::Mat& R_wb, cv:
     t_wb = (cv::Mat_<double>(3,1) << t.x(), t.y(), t.z());
 }
 
-void VIONode::reset_feature_set()
-{
-    feature_set.features_l.clear();
-    feature_set.features_r.clear();
-    feature_set.ids.clear();
-}
 
 void VIONode::add_new_landmarks(const std::vector<cv::Point2f> & features_l0, 
     const std::vector<cv::Point2f> & features_r0, 
@@ -257,82 +137,6 @@ void VIONode::add_new_landmarks(const std::vector<cv::Point2f> & features_l0,
         stereo_features.push_back(stereo_feature);
     }
     vio_estimator.add_stereo_factors(stereo_features);
-}
-
-
-void VIONode::feature_tracking(const cv::Mat & image_left, const cv::Mat & image_right)
-{
-    // check if this is the first image
-    if (!frame_id)
-    {
-        image_left_t0 = image_left;
-        image_right_t0 = image_right;
-        frame_id++;
-        return;
-    } 
-
-    // store new image
-    image_left_t1 = image_left;
-    image_right_t1 = image_right;
-    frame_id++;
-
-    // if ! enough features in current feature set, replace all of them
-    bool replaced_features = false;
-    const int min_num_features = 100;
-    if (feature_set.get_size() < min_num_features)
-    {
-        replace_all_features();
-        replaced_features = true;
-        std::cout << "[vio_gtsam_node]: replaced features." << endl;
-    }
-
-    // track features between frames into next position and updates feature_set positions
-    std::vector<cv::Point2f> & features_l0 = feature_set.features_l;
-    std::vector<cv::Point2f> & features_r0 = feature_set.features_r;
-    std::vector<cv::Point2f> features_l1;
-    std::vector<cv::Point2f> features_r1;
-    circular_matching(features_l0, features_r0, features_l1, features_r1, feature_set.ids);
-
-    std::cout << "[vio_gtsam_node]: tracking " << features_l0.size() << " features." << endl;
-
-    // if detected new features, add them as landmarks to gtsam graph
-    if (replaced_features)
-    {
-        cv::Mat features_3D_l0;
-        triangulate_features(feature_set.features_l, feature_set.features_r, features_3D_l0);
-        Pose3 gtsam_pose = vio_estimator.get_pose(); // a lot of this is bad, should use IMU prediction instead
-        // see the large example of stereovo
-        cv::Mat R_wb;
-        cv::Mat t_wb;
-        gtsam_to_open_cv_pose(gtsam_pose, R_wb, t_wb);
-        vector<cv::Point3d> features_3D_w0 = transform_to_world(features_3D_l0, R_wb, t_wb);
-
-        // add new landmarks (stereo features at previous image) 
-        add_new_landmarks(features_l0, features_r0, features_3D_w0, feature_set.ids);
-    }
-
-    // update feature_set
-    feature_set.features_l = features_l1;
-    feature_set.features_r = features_r1;
-
-    // set previous image as new image
-    image_left_t0 = image_left_t1;
-    image_right_t0 = image_right_t1;
-}
-
-void VIONode::stereo_callback(const sensor_msgs::ImageConstPtr& image_left, const sensor_msgs::ImageConstPtr& image_right)
-{
-    if (state == STATE::RUNNING_VIO)
-    {
-        cv::Mat l = ros_img_to_cv_img(image_left);
-        cv::Mat r = ros_img_to_cv_img(image_right);
-        feature_tracking(l, r);
-        if (frame_id > 1)
-        {
-            run_gtsam(feature_set.features_l, feature_set.features_r, feature_set.ids);
-            cout << "[vio_gtsam_node]: running gtsam itr #" << frame_id - 1 << endl;
-        }
-    } 
 }
 
 void VIONode::initialize_estimator(double qw, double qx, double qy, double qz)

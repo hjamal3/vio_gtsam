@@ -39,6 +39,9 @@ target_link_libraries(vio_gtsam gtsam)
 add_library(attitude_initializer src/attitude_initializer.cpp)
 target_link_libraries(attitude_initializer Eigen3::Eigen)
 
+add_library(features src/features.cpp)
+target_link_libraries(features ${OpenCV_LIBRARIES})
+
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES stereo_visual_odometry
@@ -65,4 +68,5 @@ target_link_libraries(vio_gtsam_node
    gtsam
    vio_gtsam
    attitude_initializer
+   features
 )

@@ -1,7 +1,3 @@
-#ifndef VIO_GTSAM_H
-#define VIO_GTSAM_H
-#endif
-
 #include <gtsam/geometry/Cal3_S2Stereo.h> // Cal3_S2Stereo
 
 #include <gtsam/geometry/Pose3.h> // Pose3
@@ -12,6 +8,7 @@
 
 #include <gtsam/nonlinear/NonlinearFactorGraph.h> // NonlinearFactorGraph
 #include <gtsam/nonlinear/GaussNewtonOptimizer.h> // GaussNewtonParams
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 
 // The nonlinear solvers within GTSAM are iterative solvers, meaning they linearize the
 // nonlinear functions around an initial linearization point, then solve the linear system
@@ -46,7 +43,7 @@ struct CameraParameters
 
     // Extrinsic calibration object (p_body = body_P_sensor*p_sensor)
     Pose3 body_P_sensor;
-    const Rot3 R_bc = Rot3::RzRyRx(-M_PI_2, 0.0, -M_PI_2);
+    const Rot3 R_bc = Rot3::RzRyRx(M_PI_2, 0.0, -M_PI_2-0.401426);
     const Point3 t_bc = Point3(0.25, -0.10, 1.0);
 
     // noise model for stereo points
@@ -119,7 +116,8 @@ private:
     Values initial_estimate;
 
     // Gauss-Newton nonlinear optimizer
-    GaussNewtonParams parameters;
+    GaussNewtonParams gn_parameters;
+    LevenbergMarquardtParams lm_parameters;
 
     // Stop iterating once the change in error between steps is less than this value
     static constexpr double relative_error_tol = 1e-5;
@@ -144,7 +142,7 @@ private:
     noiseModel::Diagonal::shared_ptr velocity_noise_model = noiseModel::Isotropic::Sigma(3, 0.1); // m/s
 
     // latest pose id, updates every time a new image is received
-    size_t latest_pose_id = 0; 
+    size_t latest_pose_id = 1; 
 
     // Odometry model (pose estimate between frames using PnP or ICP etc): rad, rad, rad, m, m, m
     const double angular_var = 0.1;

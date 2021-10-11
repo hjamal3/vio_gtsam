@@ -54,28 +54,30 @@ void VIOEstimator::init()
 {
     // Add initial pose and bias estimates to Values
     // RzRyRx = Rotations around Z, Y, then X: RzRyRx(double x, double y, double z);
-    add_pose_estimate(prev_pose, 0);
-    add_velocity_estimate(prev_vel, 0);
-    add_bias_estimate(imu_params.prior_imu_bias, 0);
+    add_pose_estimate(prev_pose, latest_pose_id);
+    add_velocity_estimate(prev_vel, latest_pose_id);
+    add_bias_estimate(imu_params.prior_imu_bias, latest_pose_id);
 
     // Store previous state for the imu integration and the latest predicted outcome.
     prev_state = NavState(prev_pose, prev_vel);
     prev_bias = imuBias::ConstantBias(imu_params.prior_imu_bias);
 
     // Add priors for pose and imu biases to graph - mean and a noise model (covariance matrix)
-    graph.emplace_shared<NonlinearEquality<Pose3> >(X(0), prev_pose);
-    graph.add(PriorFactor<Pose3>(X(0), prev_pose, pose_prior_noise));
-    graph.add(PriorFactor<Vector3>(V(0), prev_vel, velocity_noise_model));
-    graph.add(PriorFactor<imuBias::ConstantBias>(B(0), imu_params.prior_imu_bias, imu_params.bias_noise_model));
+    graph.emplace_shared<NonlinearEquality<Pose3> >(X(latest_pose_id), prev_pose);
+    graph.add(PriorFactor<Pose3>(X(latest_pose_id), prev_pose, pose_prior_noise));
+    graph.add(PriorFactor<Vector3>(V(latest_pose_id), prev_vel, velocity_noise_model));
+    graph.add(PriorFactor<imuBias::ConstantBias>(B(latest_pose_id), imu_params.prior_imu_bias, imu_params.bias_noise_model));
 
     if (print_output) initial_estimate.print("[vio_gtsam]: Initial Estimate:\n");
 
     // Set optimizer parameters 
     // Stop iterating once the change in error between steps is less than this value
-    parameters.relativeErrorTol = relative_error_tol;
+    gn_parameters.relativeErrorTol = relative_error_tol;
 
     // Do not perform more than N iteration steps
-    parameters.maxIterations = max_iterations;
+    gn_parameters.maxIterations = max_iterations;
+    lm_parameters.orderingType = Ordering::METIS;
+    lm_parameters.maxIterations = max_iterations;
 
     camera_params.init_params();
     imu_params.init_params();
@@ -83,8 +85,17 @@ void VIOEstimator::init()
 
 void VIOEstimator::optimize_graph_and_update_state()
 {
-    GaussNewtonOptimizer optimizer(graph, initial_estimate, parameters);
-    Values result = optimizer.optimize();
+    const bool gauss_newton = false; 
+    Values result;
+    if (gauss_newton)
+    {
+        GaussNewtonOptimizer optimizer(graph, initial_estimate, gn_parameters);
+        result = optimizer.optimize();
+    } else 
+    {
+        LevenbergMarquardtOptimizer optimizer(graph, initial_estimate, lm_parameters);
+        result = optimizer.optimize();
+    }
 
     if (print_output) result.print("[vio_gtsam]: Final Result:\n");
 
@@ -106,7 +117,7 @@ void VIOEstimator::add_stereo_factor(int xl, int xr, int y, size_t pose_id, size
 {
     graph.emplace_shared<GenericStereoFactor<Pose3,Point3>>(StereoPoint2(xl, xr, y), 
         camera_params.stereo_model, X(pose_id), L(landmark_id), camera_params.K, camera_params.body_P_sensor);
-    cout << "[vio_gtsam]: adding stereo factor between pose " << pose_id << " and landmark " << landmark_id << endl;
+    cout << "[vio_gtsam]: adding stereo factor (xl,xr): " << xl << "," << xr << " between pose " << pose_id << " and landmark " << landmark_id << endl;
 }
 
 // add odometry factor to graph. for example from PnP perhaps. unused for now.
@@ -118,7 +129,7 @@ void VIOEstimator::add_odometry_factor(Pose3 pose, size_t pose_id_prev, size_t p
 // add new 3D point
 void VIOEstimator::add_landmark_estimate(Point3 l, size_t landmark_id)
 {
-    cout << "[vio_gtsam]: adding L: " << l.x() << " " << l.y() << " " << l.z() << " #" << landmark_id << endl;
+    cout << "[vio_gtsam]: adding landmark #" << landmark_id << " at x,y,z: " << l.x() << " " << l.y() << " " << l.z() << endl;
     initial_estimate.insert(L(landmark_id), l);
 }
 
@@ -179,10 +190,10 @@ void VIOEstimator::stereo_update(const std::vector<StereoFeature> & stereo_featu
     create_imu_factor();
 
     // if enough stereo points
-    const int min_stereo_points = 5000;
+    const int min_stereo_points = 10;
     if (stereo_features.size() > min_stereo_points)
     {
-        cout << "[vio_gtsam]: running stereo_update on pose #" << latest_pose_id << endl;
+        cout << "[vio_gtsam]: propagating state using stereo on pose # " << latest_pose_id << endl;
 
         // add stereo factors to graph
         for (const auto & stereo_feature : stereo_features)
@@ -194,12 +205,11 @@ void VIOEstimator::stereo_update(const std::vector<StereoFeature> & stereo_featu
         optimize_graph_and_update_state();
     } else 
     {
-        cout << "[vio_gtsam]: propagating state using imu only " << latest_pose_id << endl;
+        cout << "[vio_gtsam]: propagating state using imu on pose # " << latest_pose_id << endl;
         // use IMU to propagate state
         prev_state = prop_state;
         prev_pose = prev_state.pose();
         imu_params.imu_preintegrated_->resetIntegrationAndSetBias(prev_bias);
-
     }
     cout << "[vio_gtsam]: latest pose estimate: " << endl;
     cout << prev_pose << endl;
@@ -237,22 +247,22 @@ void VIOEstimator::test_odometry_plus_loop_closure()
     Pose3 T_1(Rot3::RzRyRx(0.0, 0.0, 0.0), Point3(2.0, 0.0, 0.0));
     Pose3 T_2(Rot3::RzRyRx(0.0, 0.0, M_PI_2), Point3(2.0, 0.0, 0.0));
 
-    add_odometry_factor(T_1, 0, 1);
-    add_odometry_factor(T_2, 1, 2);
+    add_odometry_factor(T_1, 1, 2);
     add_odometry_factor(T_2, 2, 3);
     add_odometry_factor(T_2, 3, 4);
+    add_odometry_factor(T_2, 4, 5);
 
     // 2c. Add the loop closure constraint
     // This factor encodes the fact that we have returned to the same pose. In real systems,
     // these constraints may be identified in many ways, such as appearance-based techniques
     // with camera images. We will use another Between Factor to enforce this constraint:
-    add_odometry_factor(T_2, 4, 1);
+    add_odometry_factor(T_2, 5, 2);
 
     if (print_output) graph.print("\n[vio_gtsam]: Factor Graph:\n"); // print
-    add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, -0.2), Point3(2.3, 0.1, 0.0)), 1);
-    add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, M_PI_2), Point3(4.1, 0.1, 0.0)), 2);
-    add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, M_PI), Point3(4.0, 2.0, 0.0)), 3);
-    add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, -M_PI_2), Point3(2.1, 2.1, 0.0)), 4);
+    add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, -0.2), Point3(2.3, 0.1, 0.0)), 2);
+    add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, M_PI_2), Point3(4.1, 0.1, 0.0)), 3);
+    add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, M_PI), Point3(4.0, 2.0, 0.0)), 4);
+    add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, -M_PI_2), Point3(2.1, 2.1, 0.0)), 5);
 
     if (print_output) initial_estimate.print("\n[vio_gtsam]: Initial Estimate:\n"); // print
     optimize_graph_and_update_state();
