@@ -8,7 +8,8 @@
 
 #include <iostream> // cout
 
-// going into circular matching not = output
+// create visualization option in opencv
+using namespace gtsam;
 
 VIONode::VIONode(ros::NodeHandle & n)
 {

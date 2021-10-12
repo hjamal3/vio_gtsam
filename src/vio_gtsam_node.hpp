@@ -7,8 +7,6 @@
 #include "sensor_msgs/Imu.h" // sensor_msgs::Imu::ConstPtr
 #include <opencv2/imgproc/imgproc.hpp> // cv::Mat
 
-using namespace std;
-
 enum STATE
 {
     IMU_INITIALIZATION = 1,
@@ -70,7 +68,7 @@ private:
         const std::vector<cv::Point2f> & features_r1,
         const std::vector<int> & ids);
 
-    void gtsam_to_open_cv_pose(const Pose3 & gtsam_pose, cv::Mat& R_wb,  cv::Mat& t_wb) const;
+    void gtsam_to_open_cv_pose(const gtsam::Pose3 & gtsam_pose, cv::Mat& R_wb,  cv::Mat& t_wb) const;
 
     void add_new_landmarks(const std::vector<cv::Point2f> & features_l0, 
         const std::vector<cv::Point2f> & features_r0, 

@@ -7,6 +7,8 @@
 
 #include <iostream> // cout
 
+using namespace std;
+
 void Features::init(double fx, double fy, double cx, double cy, double b, int _img_width, int _img_height)
 {
     proj_mat_l = (cv::Mat_<double>(3, 4) << fx, 0., cx, 0., 0., fy, cy, 0., 0,  0., 1., 0.);
