@@ -1,3 +1,6 @@
+#ifndef VIO_GTSAM_NODE_H
+#define VIO_GTSAM_NODE_H
+
 #include "vio_gtsam.hpp"
 #include "attitude_initializer.hpp"
 #include "features.hpp"
@@ -17,7 +20,7 @@ struct VIONode
 {
 public:
 
-    VIONode(ros::NodeHandle & n);
+    VIONode(ros::NodeHandle & n, bool use_vio);
 
     void stereo_callback(const sensor_msgs::ImageConstPtr& image_left, const sensor_msgs::ImageConstPtr& image_right);
 
@@ -37,6 +40,8 @@ public:
     static constexpr int img_height = 480;
 
 private:
+
+    bool use_vio = true;
 
     STATE state = STATE::IMU_INITIALIZATION;
 
@@ -58,25 +63,24 @@ private:
     cv::Mat R_bc;
     cv::Mat t_bc;
 
-    cv::Mat ros_img_to_cv_img(const sensor_msgs::ImageConstPtr img) const;
-
-    vector<cv::Point3d> transform_to_world(const cv::Mat & points3D_cam, 
-        const cv::Mat & R_wb,
-        const cv::Mat & t_wb) const;
-
-    void run_gtsam(const std::vector<cv::Point2f> & features_l1, 
+    void run_gtsam_stereo(const std::vector<cv::Point2f> & features_l1, 
         const std::vector<cv::Point2f> & features_r1,
         const std::vector<int> & ids);
 
-    void gtsam_to_open_cv_pose(const gtsam::Pose3 & gtsam_pose, cv::Mat& R_wb,  cv::Mat& t_wb) const;
-
-    void add_new_landmarks(const std::vector<cv::Point2f> & features_l0, 
-        const std::vector<cv::Point2f> & features_r0, 
-        const std::vector<cv::Point3d> & points3D_w0, 
-        const std::vector<int> & ids);
+    void add_new_landmarks();
 
     void imu_callback(const sensor_msgs::Imu::ConstPtr& msg);
 
     void initialize_estimator(double qw, double qx, double qy, double qz);
 
+    cv::Mat ros_img_to_cv_img(const sensor_msgs::ImageConstPtr img) const;
+
+    void gtsam_to_open_cv_pose(const gtsam::Pose3 & gtsam_pose, cv::Mat& R_wb,  cv::Mat& t_wb) const;
+
+    vector<cv::Point3d> transform_to_world(const cv::Mat & points3D_cam, 
+        const cv::Mat & R_wb,
+        const cv::Mat & t_wb) const;
+
 };
+
+#endif

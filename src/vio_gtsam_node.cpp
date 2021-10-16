@@ -11,57 +11,18 @@
 // create visualization option in opencv
 using namespace gtsam;
 
-VIONode::VIONode(ros::NodeHandle & n)
+VIONode::VIONode(ros::NodeHandle & n, bool use_vio) : use_vio(use_vio)
 {
-    imu_subscriber = n.subscribe(imu_topic, 1000, &VIONode::imu_callback,  this);
+    if (use_vio) imu_subscriber = n.subscribe(imu_topic, 1000, &VIONode::imu_callback,  this);
 
-    // camera projection matrices
-    const float fx = vio_estimator.camera_params.fx; 
-    const float fy = vio_estimator.camera_params.fy;
-    const float cx = vio_estimator.camera_params.cx;
-    const float cy = vio_estimator.camera_params.cy;
-    const float b = vio_estimator.camera_params.b;
-
-    features.init(fx, fy, cx, cy, b, img_width, img_height);
+    features.init(vio_estimator.camera_params.fx,
+        vio_estimator.camera_params.fy, 
+        vio_estimator.camera_params.cx, 
+        vio_estimator.camera_params.cy, 
+        vio_estimator.camera_params.b, 
+        img_width, 
+        img_height);
 }
-
-// ros images to opencv images
-cv::Mat VIONode::ros_img_to_cv_img(const sensor_msgs::ImageConstPtr img) const 
-{
-    cv_bridge::CvImagePtr cv_ptr;
-    // sandbox exception
-    try {
-        cv_ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
-    } catch (cv_bridge::Exception &e) 
-    {
-        std::cerr << "exception" << std::endl;
-        return cv::Mat();
-    }
-    return cv_ptr->image;
-}
-
-// transform 3D points to world frame given pose: (p_w = R_wc*p_c + t_wc)
-vector<cv::Point3d> VIONode::transform_to_world(const cv::Mat & points3D_cam, 
-    const cv::Mat & R_wb,
-    const cv::Mat & t_wb) const
-{
-    // transform point from camera frame to world frame via body frame
-    vector<cv::Point3d> points3D_w;
-    points3D_w.reserve(points3D_cam.rows);
-    for (int i = 0; i < points3D_cam.rows; ++i)
-    {
-        cv::Point3d pt_c = {points3D_cam.at<cv::Point3f>(i).x, 
-            points3D_cam.at<cv::Point3f>(i).y, 
-            points3D_cam.at<cv::Point3f>(i).z};
-        // convert to body frame
-        cv::Mat pt_b = R_bc*cv::Mat(pt_c) + t_bc;
-        // convert to world frame
-        cv::Mat pt_w = R_wb*cv::Mat(pt_b) + t_wb;
-        points3D_w.push_back(cv::Point3d(pt_w));
-    }    
-    return points3D_w;
-}
-
 
 void VIONode::stereo_callback(const sensor_msgs::ImageConstPtr& image_left, const sensor_msgs::ImageConstPtr& image_right)
 {
@@ -73,33 +34,26 @@ void VIONode::stereo_callback(const sensor_msgs::ImageConstPtr& image_left, cons
         bool replaced_features = false;
         features.feature_tracking(l, r, replaced_features);
 
-        // if detected new features, add them as landmarks to gtsam graph
-        if (replaced_features)
+        if (use_vio)
         {
-            cv::Mat features_3D_l0;
-            features.triangulate_features(features.feature_set.features_l_prev, features.feature_set.features_r_prev, features_3D_l0);
-            Pose3 gtsam_pose = vio_estimator.get_pose();
-            // see the large example of stereovo
-            cv::Mat R_wb;
-            cv::Mat t_wb;
-            gtsam_to_open_cv_pose(gtsam_pose, R_wb, t_wb);
-            vector<cv::Point3d> features_3D_w0 = transform_to_world(features_3D_l0, R_wb, t_wb);
+            // if detected new features, add them as landmarks to gtsam graph
+            if (replaced_features) add_new_landmarks();
 
-            // add new landmarks (stereo features at previous image) 
-            add_new_landmarks(features.feature_set.features_l_prev, features.feature_set.features_r_prev, features_3D_w0, features.feature_set.ids);
-        }
-
-        if (frame_id > 1)
+            if (frame_id > 1)
+            {
+                cout << "[vio_gtsam_node]: running gtsam itr #" << frame_id - 1 << endl;
+                run_gtsam_stereo(features.get_features_l(), features.get_features_r(), features.get_ids());
+                cout << "\n\n\n" << endl;
+            }
+        } else 
         {
-            cout << "[vio_gtsam_node]: running gtsam itr #" << frame_id - 1 << endl;
-            run_gtsam(features.feature_set.features_l, features.feature_set.features_r, features.feature_set.ids);
-            cout << "\n[vio_gtsam_node]: *************************\n" << endl;
+
         }
         frame_id++;
     } 
 }
 
-void VIONode::run_gtsam(const std::vector<cv::Point2f> & features_l1, 
+void VIONode::run_gtsam_stereo(const std::vector<cv::Point2f> & features_l1, 
     const std::vector<cv::Point2f> & features_r1,
     const std::vector<int> & ids)
 {
@@ -110,54 +64,34 @@ void VIONode::run_gtsam(const std::vector<cv::Point2f> & features_l1,
         StereoFeature stereo_feature(features_l1[i].x, features_r1[i].x, features_l1[i].y, ids[i]);
         stereo_features.push_back(stereo_feature);
     }
-    vio_estimator.stereo_update(stereo_features);
+    vio_estimator.stereo_vio_update(stereo_features);
 }
 
-// GTSAM pose to opencv matrices
-void VIONode::gtsam_to_open_cv_pose(const Pose3 & gtsam_pose, cv::Mat& R_wb, cv::Mat& t_wb) const 
+void VIONode::add_new_landmarks()
 {
-    Rot3 R = gtsam_pose.rotation();
-    Point3 t = gtsam_pose.translation();
-    R_wb = (cv::Mat_<double>(3,3) << R.r1().x(), R.r1().y(), R.r1().z(), 
-        R.r2().x(), R.r2().y(), R.r2().z(), 
-        R.r3().x(), R.r3().y(), R.r3().z());
-    t_wb = (cv::Mat_<double>(3,1) << t.x(), t.y(), t.z());
-}
+    // compute stereo features in 3d world frame
+    cv::Mat features_3D_l0;
+    features.triangulate_features(features.get_features_l_prev(), features.get_features_r_prev(), features_3D_l0);
+    Pose3 gtsam_pose = vio_estimator.get_pose();
+    cv::Mat R_wb;
+    cv::Mat t_wb;
+    gtsam_to_open_cv_pose(gtsam_pose, R_wb, t_wb);
+    vector<cv::Point3d> features_3D_w0 = transform_to_world(features_3D_l0, R_wb, t_wb);
 
-
-void VIONode::add_new_landmarks(const std::vector<cv::Point2f> & features_l0, 
-    const std::vector<cv::Point2f> & features_r0, 
-    const std::vector<cv::Point3d> & points3D_w0, 
-    const std::vector<int> & ids)
-{
     // add new landmarks and their stereo factors
     std::vector<StereoFeature> stereo_features;
+    std::vector<int> & ids = features.get_ids();
+    std::vector<cv::Point2f> & features_l_prev = features.get_features_l_prev();
+    std::vector<cv::Point2f> & features_r_prev = features.get_features_r_prev();
+
     for (size_t i = 0; i < ids.size(); ++i)
     {
-        Point3 pt(points3D_w0[i].x, points3D_w0[i].y, points3D_w0[i].z);
+        Point3 pt(features_3D_w0[i].x, features_3D_w0[i].y, features_3D_w0[i].z);
         vio_estimator.add_landmark_estimate(pt, ids[i]);
-        StereoFeature stereo_feature(features_l0[i].x, features_r0[i].x, features_l0[i].y, ids[i]);
+        StereoFeature stereo_feature(features_l_prev[i].x, features_r_prev[i].x, features_l_prev[i].y, ids[i]);
         stereo_features.push_back(stereo_feature);
     }
     vio_estimator.add_stereo_factors(stereo_features);
-}
-
-void VIONode::initialize_estimator(double qw, double qx, double qy, double qz)
-{
-    // initialize gtsam estimator
-    vio_estimator.initialize_pose(qw, qx, qy, qz, 0.0, 0.0, 0.0); // initialize pose (attitude important)
-    vio_estimator.init();
-
-    // obtain body-camera extrinsics from estimator
-    Point3 r1 = vio_estimator.camera_params.R_bc.r1();
-    Point3 r2 = vio_estimator.camera_params.R_bc.r2();
-    Point3 r3 = vio_estimator.camera_params.R_bc.r3();
-    R_bc = (cv::Mat_<double>(3,3) << r1.x(), r1.y(), r1.z(),
-        r2.x(), r2.y(), r2.z(),
-        r3.x(), r3.y(), r3.z());
-    t_bc = (cv::Mat_<double>(3,1) << vio_estimator.camera_params.t_bc.x(), 
-        vio_estimator.camera_params.t_bc.y(), 
-        vio_estimator.camera_params.t_bc.z());
 }
 
 void VIONode::imu_callback(const sensor_msgs::Imu::ConstPtr& msg)
@@ -183,13 +117,87 @@ void VIONode::imu_callback(const sensor_msgs::Imu::ConstPtr& msg)
     }
 }
 
+void VIONode::initialize_estimator(double qw, double qx, double qy, double qz)
+{
+    // initialize gtsam estimator
+    if (use_vio)
+    {
+        vio_estimator.initialize_pose(qw, qx, qy, qz, 0.0, 0.0, 0.0); // initialize pose (attitude important)
+        vio_estimator.init_vio();
+    } else 
+    {
+        vio_estimator.initialize_pose(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        //vio_estimator.init_vo();
+    }
+
+    // obtain body-camera extrinsics from estimator
+    Point3 r1 = vio_estimator.camera_params.R_bc.r1();
+    Point3 r2 = vio_estimator.camera_params.R_bc.r2();
+    Point3 r3 = vio_estimator.camera_params.R_bc.r3();
+    R_bc = (cv::Mat_<double>(3,3) << r1.x(), r1.y(), r1.z(),
+        r2.x(), r2.y(), r2.z(),
+        r3.x(), r3.y(), r3.z());
+    t_bc = (cv::Mat_<double>(3,1) << vio_estimator.camera_params.t_bc.x(), 
+        vio_estimator.camera_params.t_bc.y(), 
+        vio_estimator.camera_params.t_bc.z());
+}
+
+// ros images to opencv images
+cv::Mat VIONode::ros_img_to_cv_img(const sensor_msgs::ImageConstPtr img) const 
+{
+    cv_bridge::CvImagePtr cv_ptr;
+    // sandbox exception
+    try {
+        cv_ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
+    } catch (cv_bridge::Exception &e) 
+    {
+        std::cerr << "exception" << std::endl;
+        return cv::Mat();
+    }
+    return cv_ptr->image;
+}
+
+// GTSAM pose to opencv matrices
+void VIONode::gtsam_to_open_cv_pose(const Pose3 & gtsam_pose, cv::Mat& R_wb, cv::Mat& t_wb) const 
+{
+    Rot3 R = gtsam_pose.rotation();
+    Point3 t = gtsam_pose.translation();
+    R_wb = (cv::Mat_<double>(3,3) << R.r1().x(), R.r1().y(), R.r1().z(), 
+        R.r2().x(), R.r2().y(), R.r2().z(), 
+        R.r3().x(), R.r3().y(), R.r3().z());
+    t_wb = (cv::Mat_<double>(3,1) << t.x(), t.y(), t.z());
+}
+
+// transform 3D points to world frame given pose: (p_w = R_wc*p_c + t_wc)
+vector<cv::Point3d> VIONode::transform_to_world(const cv::Mat & points3D_cam, 
+    const cv::Mat & R_wb,
+    const cv::Mat & t_wb) const
+{
+    // transform point from camera frame to world frame via body frame
+    vector<cv::Point3d> points3D_w;
+    points3D_w.reserve(points3D_cam.rows);
+    for (int i = 0; i < points3D_cam.rows; ++i)
+    {
+        cv::Point3d pt_c = {points3D_cam.at<cv::Point3f>(i).x, 
+            points3D_cam.at<cv::Point3f>(i).y, 
+            points3D_cam.at<cv::Point3f>(i).z};
+        // convert to body frame
+        cv::Mat pt_b = R_bc*cv::Mat(pt_c) + t_bc;
+        // convert to world frame
+        cv::Mat pt_w = R_wb*cv::Mat(pt_b) + t_wb;
+        points3D_w.push_back(cv::Point3d(pt_w));
+    }    
+    return points3D_w;
+}
+
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "vio_gtsam_node");
 
     ros::NodeHandle n;
 
-    VIONode vio_node(n);
+    bool use_vio = true;
+    VIONode vio_node(n, use_vio);
 
     // using message_filters to get stereo callback on one topic
     message_filters::Subscriber<sensor_msgs::Image> image1_sub(n, vio_node.img_left, vio_node.img_queue_size);

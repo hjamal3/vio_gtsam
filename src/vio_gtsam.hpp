@@ -1,3 +1,6 @@
+#ifndef VIO_GTSAM_H
+#define VIO_GTSAM_H
+
 #include <gtsam/geometry/Cal3_S2Stereo.h> // gtsam::Cal3_S2Stereo
 
 #include <gtsam/geometry/Pose3.h> // gtsam::Pose3
@@ -82,7 +85,7 @@ class VIOEstimator
 {
 public:
     // initialization
-    void init();
+    void init_vio();
     
     void add_landmark_estimate(gtsam::Point3 l, size_t landmark_id);
 
@@ -90,7 +93,7 @@ public:
 
     void integrate_imu(double ax, double ay, double az, double wx, double wy, double wz);
 
-    void stereo_update(const std::vector<StereoFeature> & stereo_features);
+    void stereo_vio_update(const std::vector<StereoFeature> & stereo_features);
 
     void add_stereo_factors(const std::vector<StereoFeature> & stereo_features);
 
@@ -148,7 +151,7 @@ private:
     gtsam::noiseModel::Diagonal::shared_ptr odometry_model = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) 
         << angular_var, angular_var, angular_var, trans_var, trans_var, trans_var).finished());
 
-    void optimize_graph_and_update_state();
+    void optimize_graph_and_update_state_vio();
 
     void add_pose_estimate(gtsam::Pose3 pose, size_t pose_id);
 
@@ -163,3 +166,5 @@ private:
     // Print covariances
     void print_covariances(const gtsam::NonlinearFactorGraph & graph, const gtsam::Values & result) const;
 };
+
+#endif 

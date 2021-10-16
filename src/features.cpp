@@ -77,15 +77,15 @@ void Features::bucket_and_update_feature_set(const std::vector<cv::Point2f> & fe
 
     // clear everything and start over
     reset_feature_set();
-    feature_set.features_l.reserve(idx.size());
-    feature_set.ids.reserve(idx.size());
+    features_l.reserve(idx.size());
+    ids.reserve(idx.size());
     for (size_t i = 0; i < idx.size(); ++i)
     {
-        feature_set.features_l.push_back(features[idx[i]]);
-        feature_set.ids.push_back(feature_id);
+        features_l.push_back(features[idx[i]]);
+        ids.push_back(feature_id);
         feature_id++;
     }
-    cout << "[features]: this many features post bucketing: " << feature_set.features_l.size() << endl;
+    cout << "[features]: this many features post bucketing: " << features_l.size() << endl;
 
 }
 
@@ -149,11 +149,11 @@ void Features::circular_matching(std::vector<cv::Point2f> & points_l_0,
 
 void Features::reset_feature_set()
 {
-    feature_set.features_l.clear();
-    feature_set.features_r.clear();
-    feature_set.features_l_prev.clear();
-    feature_set.features_r_prev.clear();
-    feature_set.ids.clear();
+    features_l.clear();
+    features_r.clear();
+    features_l_prev.clear();
+    features_r_prev.clear();
+    ids.clear();
 }
 
 void Features::feature_tracking(const cv::Mat & image_left, const cv::Mat & image_right, bool & replaced_features)
@@ -175,7 +175,7 @@ void Features::feature_tracking(const cv::Mat & image_left, const cv::Mat & imag
     // if ! enough features in current feature set, replace all of them
     replaced_features = false;
     const int min_num_features = 1000; // do it always  
-    if (feature_set.get_size() < min_num_features)
+    if (num_features() < min_num_features)
     {
         cout << "[features]: replacing all features." << endl;
 
@@ -192,22 +192,22 @@ void Features::feature_tracking(const cv::Mat & image_left, const cv::Mat & imag
         replaced_features = true;
     }
 
-    cout << "[features]: " << feature_set.features_l.size() << " features going into circular matching" << endl;
+    cout << "[features]: " << features_l.size() << " features going into circular matching" << endl;
 
-    // track features between frames into next position and updates feature_set positions
-    std::vector<cv::Point2f> & features_l0 = feature_set.features_l;
-    std::vector<cv::Point2f> & features_r0 = feature_set.features_r;
+    // track features between frames into next position and updates feature set positions
+    std::vector<cv::Point2f> & features_l0 = features_l;
+    std::vector<cv::Point2f> & features_r0 = features_r;
     std::vector<cv::Point2f> features_l1;
     std::vector<cv::Point2f> features_r1;
-    circular_matching(features_l0, features_r0, features_l1, features_r1, feature_set.ids);
+    circular_matching(features_l0, features_r0, features_l1, features_r1, ids);
 
     std::cout << "[features]: post circular_matching: " << features_l0.size() << " features." << endl;
 
-    // update feature_set
-    feature_set.features_l_prev = feature_set.features_l;
-    feature_set.features_r_prev = feature_set.features_r;
-    feature_set.features_l = features_l1;
-    feature_set.features_r = features_r1;
+    // update feature set
+    features_l_prev = features_l;
+    features_r_prev = features_r;
+    features_l = features_l1;
+    features_r = features_r1;
 
     // set previous image as new image
     image_left_t0 = image_left_t1;

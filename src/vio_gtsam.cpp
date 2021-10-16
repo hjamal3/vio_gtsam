@@ -7,13 +7,11 @@
 
 // We will use simple integer Keys to refer to the robot poses.
 #include "vio_gtsam.hpp"
-#include <gtsam/inference/Key.h>
 #include <gtsam/inference/Symbol.h> // symbol_shorthand
 #include <gtsam/slam/PriorFactor.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/nonlinear/NonlinearEquality.h> // NonlinearEquality
 #include <gtsam/nonlinear/Marginals.h> // Marginals
-
 
 using namespace std;
 using namespace gtsam;
@@ -50,7 +48,7 @@ void IMUParameters::init_params()
 
 }
 
-void VIOEstimator::init()
+void VIOEstimator::init_vio()
 {
     // Add initial pose and bias estimates to Values
     // RzRyRx = Rotations around Z, Y, then X: RzRyRx(double x, double y, double z);
@@ -83,7 +81,7 @@ void VIOEstimator::init()
     imu_params.init_params();
 }
 
-void VIOEstimator::optimize_graph_and_update_state()
+void VIOEstimator::optimize_graph_and_update_state_vio()
 {
     const bool gauss_newton = false; 
     Values result;
@@ -110,6 +108,47 @@ void VIOEstimator::optimize_graph_and_update_state()
     prev_state = NavState(prev_pose, prev_vel);
     prev_bias = result.at<imuBias::ConstantBias>(B(latest_pose_id));
     imu_params.imu_preintegrated_->resetIntegrationAndSetBias(prev_bias);
+}
+
+// received a new image's stereo features
+void VIOEstimator::stereo_vio_update(const std::vector<StereoFeature> & stereo_features)
+{
+    // update pose_id
+    latest_pose_id++;
+
+    // add new state estimate
+    NavState prop_state = imu_params.imu_preintegrated_->predict(prev_state, prev_bias);
+    add_pose_estimate(prop_state.pose(), latest_pose_id);
+    add_velocity_estimate(prop_state.v(), latest_pose_id);
+    add_bias_estimate(prev_bias, latest_pose_id); // carries over
+
+    // add IMU factor to graph
+    create_imu_factor();
+
+    // if enough stereo points then propagate state with stereo
+    const int min_stereo_points = 5;
+    if (stereo_features.size() > min_stereo_points)
+    {
+        cout << "[vio_gtsam]: propagating state using stereo on pose # " << latest_pose_id << endl;
+
+        // add stereo factors to graph
+        for (const auto & stereo_feature : stereo_features)
+        {
+            add_stereo_factor(stereo_feature.xl, stereo_feature.xr, stereo_feature.y, latest_pose_id, stereo_feature.landmark_id);
+        }
+
+        // optimize graph and update state
+        optimize_graph_and_update_state_vio();
+    } else 
+    {
+        cout << "[vio_gtsam]: propagating state using imu on pose # " << latest_pose_id << endl;
+        // use IMU to propagate state
+        prev_state = prop_state;
+        prev_pose = prev_state.pose();
+        imu_params.imu_preintegrated_->resetIntegrationAndSetBias(prev_bias);
+    }
+    cout << "[vio_gtsam]: latest pose estimate: " << endl;
+    cout << prev_pose << endl;
 }
 
 // add stereo factor (assuming rectified images) to graph
@@ -174,47 +213,6 @@ void VIOEstimator::create_imu_factor()
     graph.add(imu_factor);
 }
 
-// received a new image's stereo features
-void VIOEstimator::stereo_update(const std::vector<StereoFeature> & stereo_features)
-{
-    // update pose_id
-    latest_pose_id++;
-
-    // add new state estimate
-    NavState prop_state = imu_params.imu_preintegrated_->predict(prev_state, prev_bias);
-    add_pose_estimate(prop_state.pose(), latest_pose_id);
-    add_velocity_estimate(prop_state.v(), latest_pose_id);
-    add_bias_estimate(prev_bias, latest_pose_id); // carries over
-
-    // add IMU factor to graph
-    create_imu_factor();
-
-    // if enough stereo points then propagate state with stereo
-    const int min_stereo_points = 5;
-    if (stereo_features.size() > min_stereo_points)
-    {
-        cout << "[vio_gtsam]: propagating state using stereo on pose # " << latest_pose_id << endl;
-
-        // add stereo factors to graph
-        for (const auto & stereo_feature : stereo_features)
-        {
-            add_stereo_factor(stereo_feature.xl, stereo_feature.xr, stereo_feature.y, latest_pose_id, stereo_feature.landmark_id);
-        }
-
-        // optimize graph and update state
-        optimize_graph_and_update_state();
-    } else 
-    {
-        cout << "[vio_gtsam]: propagating state using imu on pose # " << latest_pose_id << endl;
-        // use IMU to propagate state
-        prev_state = prop_state;
-        prev_pose = prev_state.pose();
-        imu_params.imu_preintegrated_->resetIntegrationAndSetBias(prev_bias);
-    }
-    cout << "[vio_gtsam]: latest pose estimate: " << endl;
-    cout << prev_pose << endl;
-}
-
 void VIOEstimator::add_stereo_factors(const std::vector<StereoFeature> & stereo_features)
 {
     for (const auto & stereo_feature : stereo_features)
@@ -265,5 +263,5 @@ void VIOEstimator::test_odometry_plus_loop_closure()
     add_pose_estimate(Pose3(Rot3::RzRyRx(0.0, 0.0, -M_PI_2), Point3(2.1, 2.1, 0.0)), 5);
 
     if (print_output) initial_estimate.print("\n[vio_gtsam]: Initial Estimate:\n"); // print
-    optimize_graph_and_update_state();
+    optimize_graph_and_update_state_vio();
 }
