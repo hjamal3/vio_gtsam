@@ -2,7 +2,21 @@ cmake_minimum_required(VERSION 3.0.2)
 project(vio_gtsam CXX)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
-# add_compile_options(-std=c++11)
+set(CMAKE_CXX_STANDARD 11)
+
+# GoogleTest - TESTING COMES FIRST :)
+
+enable_testing()
+add_executable(
+  vio_tests
+  tests/vio_tests.cpp
+)
+target_link_libraries(
+  vio_tests
+  gtest_main
+)
+include(GoogleTest)
+gtest_discover_tests(vio_tests)
 
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
@@ -70,3 +84,4 @@ target_link_libraries(vio_gtsam_node
    attitude_initializer
    features
 )
+

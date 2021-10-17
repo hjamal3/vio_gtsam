@@ -9,6 +9,7 @@
 #include <iostream> // cout
 
 // create visualization option in opencv
+// use the gtsam values as a test (can copy some of the code directly)
 using namespace gtsam;
 
 VIONode::VIONode(ros::NodeHandle & n, bool use_vio) : use_vio(use_vio)
@@ -49,6 +50,9 @@ void VIONode::stereo_callback(const sensor_msgs::ImageConstPtr& image_left, cons
         {
 
         }
+
+        // got some form of a result, publish it here
+
         frame_id++;
     } 
 }
